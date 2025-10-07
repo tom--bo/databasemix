@@ -1,0 +1,35 @@
+services:
+  mysql57:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbmix-mysql57-test
+    ports:
+      - "3357:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpass
+    volumes:
+      - mysql57_data:/var/lib/mysql
+      - ../common/01-database-setup.sql:/docker-entrypoint-initdb.d/01-database-setup.sql:ro
+      - ../common/02-tables-views.sql:/docker-entrypoint-initdb.d/02-tables-views.sql:ro
+      - ../common/03-procedures-functions.sql:/docker-entrypoint-initdb.d/03-procedures-functions.sql:ro
+      - ../common/05-sample-data.sql:/docker-entrypoint-initdb.d/05-sample-data.sql:ro
+      - ../common/06-test-plugins.sql:/docker-entrypoint-initdb.d/06-test-plugins.sql:ro
+      - ../common/07-limited-user.sql:/docker-entrypoint-initdb.d/07-limited-user.sql:ro
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+      --sql-mode=STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  mysql57_data:
