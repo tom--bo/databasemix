@@ -164,7 +164,7 @@ func parseFlags() (*Config, error) {
 	config := &Config{}
 	setDefaultConfigFromEnv(config)
 
-	flag.StringVar(&config.DBType, "type", "", "(Required) Database type: MySQL, mysql, PostgreSQL, postgres, postgresql")
+	flag.StringVar(&config.DBType, "type", "", "Database type: mysql, postgres (default: mysql)")
 	flag.StringVar(&config.Host, "host", "localhost", "Database host, (default: localhost)")
 	flag.StringVar(&config.Port, "port", "", "Database port (default: 3306 for mysql, 5432 for postgres)")
 	flag.StringVar(&config.User, "user", "", "Database user (default: root for mysql, postgres for postgres)")
@@ -194,7 +194,8 @@ func parseFlags() (*Config, error) {
 		}
 		config.DBType = dbType
 	case "":
-		return nil, errors.New("database type is required. Use -type flag to specify 'mysql' or 'postgres'")
+		dbType = "mysql"
+		config.DBType = dbType
 	default:
 		return nil, errors.New(fmt.Sprintf("unsupported database type '%s'", config.DBType))
 	}
