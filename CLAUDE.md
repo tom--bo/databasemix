@@ -5,20 +5,31 @@ MySQL / PostgreSQL データベースの包括的な情報を取得し、Markdow
 ## プロジェクト構成
 
 ```
-main.go                 - エントリポイント、CLI引数解析、Config構造体、共通データ型定義
-collector.go            - Collector インターフェース定義
-mysql_collector.go      - MySQL 固有のデータ収集ロジック
-mysql_version.go        - MySQL バージョン検出・機能判定 (5.7/8.0/8.4, MariaDB, Percona)
-postgres_collector.go   - PostgreSQL 固有のデータ収集ロジック
-postgres_version.go     - PostgreSQL バージョン検出
-formatter.go            - 出力フォーマッタ (Markdown, XML, Plaintext) - DB種別に応じた表示切替
-go.mod                  - Go 1.22, 依存: go-sql-driver/mysql, lib/pq
+Makefile                - ビルド・テスト用 Makefile
+src/                    - Go ソースコード
+  main.go              - エントリポイント、CLI引数解析、Config構造体、共通データ型定義
+  collector.go         - Collector インターフェース定義
+  mysql_collector.go   - MySQL 固有のデータ収集ロジック
+  mysql_version.go     - MySQL バージョン検出・機能判定 (5.7/8.0/8.4, MariaDB, Percona)
+  postgres_collector.go - PostgreSQL 固有のデータ収集ロジック
+  postgres_version.go  - PostgreSQL バージョン検出
+  formatter.go         - 出力フォーマッタ (Markdown, XML, Plaintext) - DB種別に応じた表示切替
+  go.mod               - Go 1.22, 依存: go-sql-driver/mysql, lib/pq
+test_containers/        - Docker ベースのテスト環境
+  mysql-common/        - MySQL 共通 SQL 初期化スクリプト
+  postgres-common/     - PostgreSQL 共通 SQL 初期化スクリプト
+  mysql-5.7/           - MySQL 5.7 テストコンテナ (ポート 3357)
+  mysql-8.0/           - MySQL 8.0 テストコンテナ (ポート 3380)
+  mysql-8.4/           - MySQL 8.4 テストコンテナ (ポート 3384)
+  postgres-16/         - PostgreSQL 16 テストコンテナ (ポート 5416)
+  postgres-17/         - PostgreSQL 17 テストコンテナ (ポート 5417)
+  postgres-18/         - PostgreSQL 18 テストコンテナ (ポート 5418)
 ```
 
 ## ビルド & 実行
 
 ```bash
-go build -o databasemix .
+make build
 
 # MySQL
 ./databasemix -type=mysql -host=localhost -port=3306 -user=root -password=yourpassword
@@ -33,27 +44,33 @@ go build -o databasemix .
 
 ## テスト
 
-Docker コンテナによる手動テスト（Go テストフレームワークは未使用）:
+Makefile を使用した Docker コンテナベーステスト:
 
 ```bash
-# MySQL 8.0
-cd test_containers/mysql-8.0 && ./run.sh start && cd ../..
-./databasemix -type=mysql -host=localhost -port=3380 -user=root -password=rootpass -database=testdb
-cd test_containers/mysql-8.0 && ./run.sh stop
+# 全テスト実行 (MySQL + PostgreSQL 全バージョン)
+make test
 
-# PostgreSQL 16
-cd test_containers/postgres-16 && ./run.sh start && cd ../..
-./databasemix -type=postgres -host=localhost -port=5416 -user=postgres -password=rootpass -database=testdb
-cd test_containers/postgres-16 && ./run.sh stop
+# MySQL のみ
+make test-mysql
+
+# PostgreSQL のみ
+make test-postgres
+
+# 個別バージョン
+make test-mysql-8.0
+make test-postgres-17
 ```
 
-### テストコンテナ
-- `test_containers/mysql-5.7/` - ポート 3357
-- `test_containers/mysql-8.0/` - ポート 3380
-- `test_containers/mysql-8.4/` - ポート 3384
-- `test_containers/postgres-16/` - ポート 5416
-- `test_containers/common/` - MySQL 共通 SQL 初期化スクリプト
-- `test_containers/postgres-common/` - PostgreSQL 共通 SQL 初期化スクリプト
+テスト出力は `test_output/` に保存される。
+
+### コンテナ管理
+
+```bash
+make containers-up          # 全コンテナ起動
+make containers-down        # 全コンテナ停止
+make containers-up-mysql    # MySQL コンテナのみ起動
+make containers-up-postgres # PostgreSQL コンテナのみ起動
+```
 
 接続情報: root(postgres)/rootpass, testuser/testpass, readonly/readpass, admin/adminpass
 
@@ -84,6 +101,7 @@ type Collector interface {
 - 変数は `pg_settings`
 - ユーザー/ロールは `pg_roles` の `rolcanlogin` で区別
 - Extensions サポート (`pg_extension`)
+- PostgreSQL 18 ではデータディレクトリ構成が変更 (ボリュームマウント先が `/var/lib/postgresql`)
 
 ## コーディング規約
 

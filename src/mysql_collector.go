@@ -524,8 +524,8 @@ func (c *MySQLCollector) collectVariablesFromInformationSchema(info *DatabaseInf
 			continue
 		}
 		
-		// For older versions, we can't easily determine if it's modified
-		variable.Source = "UNKNOWN"
+		// For older versions without variables_info, source is not available
+		variable.Source = ""
 		variable.IsModified = false
 		
 		info.Variables = append(info.Variables, variable)
@@ -947,8 +947,8 @@ func (c *MySQLCollector) collectVariablesFromShowVariables(info *DatabaseInfo) e
 			continue
 		}
 		
-		// For very old versions, we can't determine if it's modified
-		variable.Source = "UNKNOWN"
+		// For very old versions, source is not available
+		variable.Source = ""
 		variable.IsModified = false
 		
 		info.Variables = append(info.Variables, variable)

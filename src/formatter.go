@@ -162,9 +162,7 @@ func (f *MarkdownFormatter) formatTables(result *strings.Builder, tables []Table
 	if len(tables) == 0 {
 		return
 	}
-	
-	result.WriteString("# Tables\n\n")
-	
+
 	// Group tables by database and schema, excluding views
 	dbSchemaMap := make(map[string]map[string][]TableInfo)
 	for _, table := range tables {

@@ -5,3 +5,4 @@ dbmix
 databasemix
 tmp
 tmp/*
+test_output/

@@ -585,13 +585,15 @@ func (c *PostgreSQLCollector) collectVariables(info *DatabaseInfo) error {
 	var query string
 	if c.config.OnlyModifiedVariables {
 		query = `
-			SELECT name, setting, COALESCE(unit, '') as unit, source, boot_val
+			SELECT name, setting, COALESCE(unit, '') as unit, source, boot_val,
+			       sourcefile, sourceline
 			FROM pg_catalog.pg_settings
 			WHERE source != 'default'
 			ORDER BY name`
 	} else {
 		query = `
-			SELECT name, setting, COALESCE(unit, '') as unit, source, boot_val
+			SELECT name, setting, COALESCE(unit, '') as unit, source, boot_val,
+			       sourcefile, sourceline
 			FROM pg_catalog.pg_settings
 			ORDER BY name`
 	}
@@ -605,9 +607,11 @@ func (c *PostgreSQLCollector) collectVariables(info *DatabaseInfo) error {
 	for rows.Next() {
 		var variable Variable
 		var unit, source string
-		var bootVal sql.NullString
+		var bootVal, sourceFile sql.NullString
+		var sourceLine sql.NullInt64
 
-		if err := rows.Scan(&variable.Name, &variable.CurrentValue, &unit, &source, &bootVal); err != nil {
+		if err := rows.Scan(&variable.Name, &variable.CurrentValue, &unit, &source, &bootVal,
+			&sourceFile, &sourceLine); err != nil {
 			continue
 		}
 
@@ -616,6 +620,13 @@ func (c *PostgreSQLCollector) collectVariables(info *DatabaseInfo) error {
 		}
 
 		variable.Source = source
+		if sourceFile.Valid && sourceFile.String != "" {
+			if sourceLine.Valid {
+				variable.Source = fmt.Sprintf("%s (%s:%d)", source, sourceFile.String, sourceLine.Int64)
+			} else {
+				variable.Source = fmt.Sprintf("%s (%s)", source, sourceFile.String)
+			}
+		}
 		variable.IsModified = (source != "default")
 		if bootVal.Valid {
 			variable.DefaultValue = bootVal.String

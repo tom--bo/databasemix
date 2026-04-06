@@ -118,9 +118,10 @@ func (v *MySQLVersion) SupportsInformationSchemaViews() bool {
 	return v.IsMySQL57OrLater()
 }
 
-// SupportsPerformanceSchemaVariablesInfo returns true if performance_schema.variables_info exists
+// SupportsPerformanceSchemaVariablesInfo returns true if performance_schema.variables_info has VARIABLE_SOURCE
+// This was added in MySQL 8.0; MySQL 5.7 has variables_info but without VARIABLE_SOURCE
 func (v *MySQLVersion) SupportsPerformanceSchemaVariablesInfo() bool {
-	return v.IsMySQL57OrLater()
+	return v.IsMySQL8OrLater()
 }
 
 // GetUserTableQuery returns the appropriate query to get user information based on version

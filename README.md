@@ -1,39 +1,40 @@
 # DatabaseMix
 
-A Go utility to connect to MySQL 5.7+ instances and retrieve comprehensive database information, outputting it to markdown, XML, or plaintext format.
+A Go CLI tool to connect to MySQL / PostgreSQL instances and retrieve comprehensive database information, outputting it to Markdown, XML, or Plaintext format.
 (90% of this code is written by AI)
 
 ## Features
 
-- **MySQL version support**: MySQL 5.7+, 8.0+, 8.4+ (including MariaDB and Percona detection)
+- **Database support**: MySQL 5.7+, 8.0+, 8.4+ / PostgreSQL 16, 17, 18
 - **Retrieves comprehensive database information**:
   - Database version and connection details
   - Tables with metadata (engine, collation, charset, row format, auto_increment, etc.)
   - Table DDL statements (`CREATE TABLE`)
   - Views and their DDL statements (`CREATE VIEW`)
   - Stored functions and procedures with metadata and definitions
-  - Triggers
 - **Security information**:
   - User accounts and their attributes
   - User privileges (`GRANTS`)
-  - Roles and role grants (MySQL 8.0+)
+  - Roles and role grants (MySQL 8.0+ / PostgreSQL)
 - **System configuration**:
   - Global variables (all or only modified with `-only-modified-variables`)
-  - Installed plugins (non-built-in only)
+  - Installed plugins (MySQL) / Extensions (PostgreSQL)
   - Components (MySQL 8.0+)
-  - Replication information (optional, with `-replication`)
+  - Replication information (optional, MySQL only, with `-replication`)
 - **Multiple output formats**: Markdown (default), XML, Plaintext
-- **Environment variable support**: `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
+- **Environment variable support**:
+  - MySQL: `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
+  - PostgreSQL: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`
 
 ## Requirements
 
 - Go 1.22 or later
-- Target database: MySQL 5.7 / 8.0 / 8.4
+- Target database: MySQL 5.7 / 8.0 / 8.4, PostgreSQL 16 / 17 / 18
 
 ## Installation
 
 ```bash
-go install github.com/tom--bo/databasemix@v0.1.0
+go install github.com/tom--bo/databasemix@latest
 ```
 
 ## Building from Source
@@ -41,125 +42,136 @@ go install github.com/tom--bo/databasemix@v0.1.0
 ```bash
 git clone https://github.com/tom--bo/databasemix
 cd databasemix
-go build -o databasemix .
+make build
+```
+
+## Project Structure
+
+```
+databasemix/
+├── Makefile                 # Build & test automation
+├── src/                     # Go source code
+│   ├── main.go              # Entry point, CLI flags, data types
+│   ├── collector.go         # Collector interface
+│   ├── mysql_collector.go   # MySQL data collection
+│   ├── mysql_version.go     # MySQL version detection
+│   ├── postgres_collector.go # PostgreSQL data collection
+│   ├── postgres_version.go  # PostgreSQL version detection
+│   ├── formatter.go         # Output formatters (Markdown, XML, Plaintext)
+│   ├── go.mod
+│   └── go.sum
+├── test_containers/         # Docker-based test environments
+│   ├── mysql-common/        # Shared MySQL init SQL scripts
+│   ├── postgres-common/     # Shared PostgreSQL init SQL scripts
+│   ├── mysql-5.7/           # MySQL 5.7 (port 3357)
+│   ├── mysql-8.0/           # MySQL 8.0 (port 3380)
+│   ├── mysql-8.4/           # MySQL 8.4 (port 3384)
+│   ├── postgres-16/         # PostgreSQL 16 (port 5416)
+│   ├── postgres-17/         # PostgreSQL 17 (port 5417)
+│   └── postgres-18/         # PostgreSQL 18 (port 5418)
+└── samples/                 # Sample output files
 ```
 
 ## Usage
 
 ```bash
-./databasemix -host=localhost -port=3306 -user=root -password=yourpassword
+# MySQL
+./databasemix -type=mysql -host=localhost -port=3306 -user=root -password=yourpassword
+
+# PostgreSQL
+./databasemix -type=postgres -host=localhost -port=5432 -user=postgres -password=yourpassword -database=mydb
 ```
+
+When `-type` is omitted, the database type is auto-detected from the port number (3306 → MySQL, 5432 → PostgreSQL).
 
 ### Command Line Arguments
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `-type` | (auto) | Database type: `mysql`, `postgres` (auto-detected from port if omitted) |
 | `-host` | `localhost` | Database host |
-| `-port` | `3306` | MySQL port |
-| `-user` | `root` | MySQL user |
+| `-port` | `3306`/`5432` | Database port (default depends on type) |
+| `-user` | `root`/`postgres` | Database user (default depends on type) |
 | `-password` | | Database password |
 | `-database` | | Database name (optional; all accessible databases if omitted) |
-| `-replication` | `false` | Include replication information |
+| `-replication` | `false` | Include replication information (MySQL only) |
 | `-except-tables` | `false` | Exclude tables and views |
 | `-except-stored-procedures` | `false` | Exclude stored procedures and functions |
 | `-except-variables` | `false` | Exclude variables/configuration parameters |
-| `-only-modified-variables` | `false` | Show only modified variables (MySQL only) |
+| `-only-modified-variables` | `false` | Show only modified variables |
 | `-except-users` | `false` | Exclude user accounts |
 | `-except-roles` | `false` | Exclude user roles |
-| `-except-plugins` | `false` | Exclude installed plugins |
+| `-except-plugins` | `false` | Exclude installed plugins (MySQL only) |
+| `-except-extensions` | `false` | Exclude installed extensions (PostgreSQL only) |
 | `-format` | `markdown` | Output format (`markdown`/`xml`/`plaintext`) |
 | `-outfile` | `dbmix-output` | Output filename (extension added based on format) |
 
 ## Output
 
-The output file (e.g., `dbmix-output.md`) contains:
+The output file contains:
 
 1. **File Summary** - Database type, version, and file structure overview
-2. **Variables** - Global configuration parameters (optionally only modified ones with default values and source)
-3. **Tables** - Metadata (engine, charset, collation, row format, etc.) and full DDL
+2. **Variables** - Configuration parameters (optionally only modified ones)
+3. **Tables** - Metadata and full DDL
 4. **Views** - View definitions with DDL
 5. **Stored Functions & Procedures** - Definitions with metadata
-6. **User Accounts** - Usernames, authentication details, and `GRANT` statements
-7. **Roles** (MySQL 8.0+) - Role definitions, privileges, and member assignments
-8. **Plugins** - Non-built-in installed plugins
-9. **Replication Info** (optional) - Replica status, semi-sync, group replication
-
-### Output Example
-
-```markdown
-# File Summary
-
-**Database Type**: MySQL
-**Database Version**: 8.0.45
-
-# Variables
-
-| Variable Name | Current Value |
-|---------------|---------------|
-| max_connections | 151 |
-
-# Tables
-
-## testdb.users
-
-### Metadata
-- Type: BASE TABLE
-- Engine: InnoDB
-
-### DDL
-​```sql
-CREATE TABLE `users` (...)
-​```
-
-# User Accounts
-
-## root@localhost
-- Grants:
-  - GRANT ALL PRIVILEGES ON *.* TO `root`@`localhost`
-```
+6. **User Accounts** - Usernames, authentication details, and privileges
+7. **Roles** - Role definitions, privileges, and member assignments
+8. **Plugins** (MySQL) / **Extensions** (PostgreSQL) - Installed plugins/extensions
+9. **Replication Info** (MySQL, optional) - Replica status, semi-sync, group replication
 
 ## Testing
 
-Docker containers are provided for testing against multiple MySQL versions.
+Docker containers are provided for testing against multiple database versions.
 
 ### Prerequisites
 
 - Docker and Docker Compose
+- GNU Make
 
-### Available Test Containers
-
-| Version | Port | Directory |
-|---------|------|-----------|
-| MySQL 5.7 | 3357 | `test_containers/mysql-5.7/` |
-| MySQL 8.0 | 3380 | `test_containers/mysql-8.0/` |
-| MySQL 8.4 | 3384 | `test_containers/mysql-8.4/` |
-
-### Test Container Management
+### Make Targets
 
 ```bash
-# Start a container
-cd test_containers/mysql-8.0 && ./run.sh start
-
-# Run databasemix against it
-./databasemix -host=localhost -port=3380 -user=root -password=rootpass -database=testdb
-
-# Other commands: stop, restart, logs, shell, status, clean
-./run.sh stop
+make build              # Build the binary
+make test               # Run all tests (MySQL + PostgreSQL, all versions)
+make test-mysql         # Run all MySQL tests (5.7, 8.0, 8.4)
+make test-postgres      # Run all PostgreSQL tests (16, 17, 18)
+make test-mysql-8.0     # Run test for a specific MySQL version
+make test-postgres-17   # Run test for a specific PostgreSQL version
+make containers-up      # Start all test containers
+make containers-down    # Stop all test containers
+make clean              # Remove binary and test output
+make help               # Show all available targets
 ```
 
-### Quick Test
+### Test Containers
 
-```bash
-cd test_containers
-./quick-test.sh 8.0    # Accepts: 5.7, 8.0, 8.4
-```
+| Database | Version | Port | Directory |
+|----------|---------|------|-----------|
+| MySQL | 5.7 | 3357 | `test_containers/mysql-5.7/` |
+| MySQL | 8.0 | 3380 | `test_containers/mysql-8.0/` |
+| MySQL | 8.4 | 3384 | `test_containers/mysql-8.4/` |
+| PostgreSQL | 16 | 5416 | `test_containers/postgres-16/` |
+| PostgreSQL | 17 | 5417 | `test_containers/postgres-17/` |
+| PostgreSQL | 18 | 5418 | `test_containers/postgres-18/` |
 
 ### Test Data
 
-The `test_containers/common/` directory contains shared SQL init scripts that set up:
-- 2 databases (`testdb`, `testdb2`) with tables, views, triggers
-- Stored procedures and functions
-- Sample data
-- Multiple test users with different privilege levels
+- **MySQL** (`test_containers/mysql-common/`): databases, tables, views, triggers, stored procedures/functions, sample data, multiple test users with different privilege levels
+- **PostgreSQL** (`test_containers/postgres-common/`): databases, tables, views, functions, sample data, roles and users
 
-Version-specific setup (roles for 8.0+, auth plugin differences for 8.4) is in each version's directory.
+Connection credentials: root(postgres)/rootpass, testuser/testpass, readonly/readpass, admin/adminpass
+
+### Individual Container Management
+
+Each version directory has a `run.sh` script for manual management:
+
+```bash
+cd test_containers/mysql-8.0
+./run.sh start    # Start container
+./run.sh stop     # Stop container
+./run.sh shell    # Open database shell
+./run.sh logs     # Show container logs
+./run.sh status   # Show container status
+./run.sh clean    # Remove container and volumes
+```
