@@ -257,32 +257,27 @@ func (f *MarkdownFormatter) formatViewDetails(result *strings.Builder, tables []
 }
 
 func (f *MarkdownFormatter) formatVariables(result *strings.Builder, variables []Variable) {
-	// Check if this is only-modified-variables mode by checking if all variables are modified
-	hasExtendedInfo := len(variables) > 0 && variables[0].IsModified
-	if hasExtendedInfo {
-		// Double-check that all variables are actually modified (only-modified-variables mode)
-		for _, v := range variables {
-			if !v.IsModified {
-				hasExtendedInfo = false
-				break
-			}
+	// Check if source information is available
+	hasSource := false
+	for _, v := range variables {
+		if v.Source != "" {
+			hasSource = true
+			break
 		}
 	}
-	
-	if hasExtendedInfo {
-		// 4-column format for -only-modified-variables
-		result.WriteString("| Variable Name | Current Value | Default Value | Source |\n")
-		result.WriteString("|---------------|---------------|---------------|--------|\n")
-		
+
+	if hasSource {
+		result.WriteString("| Variable Name | Current Value | Source |\n")
+		result.WriteString("|---------------|---------------|--------|\n")
+
 		for _, variable := range variables {
-			result.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
-				variable.Name, variable.CurrentValue, variable.DefaultValue, variable.Source))
+			result.WriteString(fmt.Sprintf("| %s | %s | %s |\n",
+				variable.Name, variable.CurrentValue, variable.Source))
 		}
 	} else {
-		// 2-column format for normal variables
 		result.WriteString("| Variable Name | Current Value |\n")
 		result.WriteString("|---------------|---------------|\n")
-		
+
 		for _, variable := range variables {
 			result.WriteString(fmt.Sprintf("| %s | %s |\n",
 				variable.Name, variable.CurrentValue))
@@ -562,8 +557,9 @@ type XMLRoutine struct {
 }
 
 type XMLVariable struct {
-	Name  string `xml:"name,attr"`
-	Value string `xml:"value"`
+	Name   string `xml:"name,attr"`
+	Value  string `xml:"value"`
+	Source string `xml:"source,omitempty"`
 }
 
 type XMLRole struct {
@@ -628,29 +624,14 @@ func (f *XMLFormatter) Format(info *DatabaseInfo) (string, error) {
 	// Variables
 	if len(info.Variables) > 0 {
 		result.WriteString("  <variables>\n")
-		
-		// Check if this is only-modified-variables mode
-		hasExtendedInfo := len(info.Variables) > 0 && info.Variables[0].IsModified
-		if hasExtendedInfo {
-			// Double-check that all variables are actually modified
-			for _, v := range info.Variables {
-				if !v.IsModified {
-					hasExtendedInfo = false
-					break
-				}
-			}
-		}
-		
+
 		for _, variable := range info.Variables {
 			result.WriteString("    <variable>\n")
 			result.WriteString(fmt.Sprintf("      <name>%s</name>\n", f.escapeXML(variable.Name)))
 			result.WriteString(fmt.Sprintf("      <current_value>%s</current_value>\n", f.escapeXML(variable.CurrentValue)))
-			
-			if hasExtendedInfo {
-				result.WriteString(fmt.Sprintf("      <default_value>%s</default_value>\n", f.escapeXML(variable.DefaultValue)))
+			if variable.Source != "" {
 				result.WriteString(fmt.Sprintf("      <source>%s</source>\n", f.escapeXML(variable.Source)))
 			}
-			
 			result.WriteString("    </variable>\n")
 		}
 		result.WriteString("  </variables>\n")
@@ -992,8 +973,9 @@ func (f *XMLFormatter) convertToXML(info *DatabaseInfo) *XMLRoot {
 	// Convert variables
 	for _, variable := range info.Variables {
 		xmlRoot.Variables = append(xmlRoot.Variables, XMLVariable{
-			Name:  variable.Name,
-			Value: variable.CurrentValue,
+			Name:   variable.Name,
+			Value:  variable.CurrentValue,
+			Source: variable.Source,
 		})
 	}
 
@@ -1078,33 +1060,27 @@ func (f *PlaintextFormatter) Format(info *DatabaseInfo) (string, error) {
 	if len(info.Variables) > 0 {
 		result.WriteString("Variables\n")
 		result.WriteString("=========\n\n")
-		
-		// Check if this is only-modified-variables mode
-		hasExtendedInfo := len(info.Variables) > 0 && info.Variables[0].IsModified
-		if hasExtendedInfo {
-			// Double-check that all variables are actually modified
-			for _, v := range info.Variables {
-				if !v.IsModified {
-					hasExtendedInfo = false
-					break
-				}
+
+		hasSource := false
+		for _, v := range info.Variables {
+			if v.Source != "" {
+				hasSource = true
+				break
 			}
 		}
-		
-		if hasExtendedInfo {
-			// 4-column format for -only-modified-variables
-			result.WriteString(fmt.Sprintf("%-40s %-30s %-30s %s\n", "Variable Name", "Current Value", "Default Value", "Source"))
-			result.WriteString(strings.Repeat("-", 130) + "\n")
-			
+
+		if hasSource {
+			result.WriteString(fmt.Sprintf("%-50s %-40s %s\n", "Variable Name", "Current Value", "Source"))
+			result.WriteString(strings.Repeat("-", 120) + "\n")
+
 			for _, variable := range info.Variables {
-				result.WriteString(fmt.Sprintf("%-40s %-30s %-30s %s\n",
-					variable.Name, variable.CurrentValue, variable.DefaultValue, variable.Source))
+				result.WriteString(fmt.Sprintf("%-50s %-40s %s\n",
+					variable.Name, variable.CurrentValue, variable.Source))
 			}
 		} else {
-			// 2-column format for normal variables
 			result.WriteString(fmt.Sprintf("%-50s %s\n", "Variable Name", "Current Value"))
 			result.WriteString(strings.Repeat("-", 100) + "\n")
-			
+
 			for _, variable := range info.Variables {
 				result.WriteString(fmt.Sprintf("%-50s %s\n",
 					variable.Name, variable.CurrentValue))

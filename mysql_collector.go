@@ -446,21 +446,20 @@ func (c *MySQLCollector) collectVariables(info *DatabaseInfo) error {
 // collectVariablesFromPerformanceSchema collects variables from performance_schema (MySQL 5.7+)
 func (c *MySQLCollector) collectVariablesFromPerformanceSchema(info *DatabaseInfo) error {
 	var query string
-	
+
 	if c.config.OnlyModifiedVariables {
-		// Only get modified variables
 		query = `
-			SELECT vi.VARIABLE_NAME, gv.VARIABLE_VALUE, vi.VARIABLE_SOURCE, vi.DEFAULT_VALUE
+			SELECT vi.VARIABLE_NAME, gv.VARIABLE_VALUE,
+			       vi.VARIABLE_SOURCE, COALESCE(vi.VARIABLE_PATH, '') as VARIABLE_PATH
 			FROM performance_schema.variables_info vi
 			JOIN performance_schema.global_variables gv ON vi.VARIABLE_NAME = gv.VARIABLE_NAME
 			WHERE vi.VARIABLE_SOURCE != 'COMPILED'
 			ORDER BY vi.VARIABLE_NAME`
 	} else {
-		// Get all variables
 		query = `
-			SELECT vi.VARIABLE_NAME, gv.VARIABLE_VALUE, 
-			       COALESCE(vi.VARIABLE_SOURCE, 'COMPILED') as VARIABLE_SOURCE, 
-			       COALESCE(vi.DEFAULT_VALUE, '') as DEFAULT_VALUE
+			SELECT gv.VARIABLE_NAME, gv.VARIABLE_VALUE,
+			       COALESCE(vi.VARIABLE_SOURCE, 'COMPILED') as VARIABLE_SOURCE,
+			       COALESCE(vi.VARIABLE_PATH, '') as VARIABLE_PATH
 			FROM performance_schema.global_variables gv
 			LEFT JOIN performance_schema.variables_info vi ON vi.VARIABLE_NAME = gv.VARIABLE_NAME
 			ORDER BY gv.VARIABLE_NAME`
@@ -475,19 +474,20 @@ func (c *MySQLCollector) collectVariablesFromPerformanceSchema(info *DatabaseInf
 
 	for rows.Next() {
 		var variable Variable
-		var source, defaultValue sql.NullString
+		var source, variablePath sql.NullString
 
-		err := rows.Scan(&variable.Name, &variable.CurrentValue, &source, &defaultValue)
+		err := rows.Scan(&variable.Name, &variable.CurrentValue, &source, &variablePath)
 		if err != nil {
 			continue
 		}
 
 		if source.Valid {
 			variable.Source = source.String
+			// Append path info if available (e.g. config file path)
+			if variablePath.Valid && variablePath.String != "" {
+				variable.Source = source.String + " (" + variablePath.String + ")"
+			}
 			variable.IsModified = (source.String != "COMPILED")
-		}
-		if defaultValue.Valid {
-			variable.DefaultValue = defaultValue.String
 		}
 
 		info.Variables = append(info.Variables, variable)
