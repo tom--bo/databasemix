@@ -1,0 +1,5 @@
+FROM postgres:18
+
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=rootpass
+ENV POSTGRES_DB=testdb
