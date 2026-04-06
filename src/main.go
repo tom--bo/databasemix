@@ -33,6 +33,7 @@ type Config struct {
 	ExceptRoles            bool
 	ExceptPlugins          bool
 	ExceptExtensions       bool // PostgreSQL only
+	TLS                    string // TLS/SSL mode: MySQL(false,true,skip-verify,preferred), PostgreSQL(disable,require,verify-ca,verify-full)
 }
 
 func main() {
@@ -178,6 +179,7 @@ func parseFlags() (*Config, error) {
 	flag.BoolVar(&config.ExceptRoles, "except-roles", false, "Exclude user roles")
 	flag.BoolVar(&config.ExceptPlugins, "except-plugins", false, "Exclude installed plugins (MySQL only)")
 	flag.BoolVar(&config.ExceptExtensions, "except-extensions", false, "Exclude installed extensions (PostgreSQL only)")
+	flag.StringVar(&config.TLS, "tls", "", "TLS/SSL mode (MySQL: false,true,skip-verify,preferred / PostgreSQL: disable,require,verify-ca,verify-full)")
 	flag.StringVar(&config.Format, "format", "markdown", "Output format: markdown, xml, plaintext")
 	flag.StringVar(&config.OutputFile, "outfile", "dbmix-output", "Output filename (if not specified, output goes to stdout)")
 
@@ -212,6 +214,28 @@ func parseFlags() (*Config, error) {
 		}
 	}
 
+	// Validate TLS option based on DB type
+	if config.TLS != "" {
+		tlsVal := strings.ToLower(strings.TrimSpace(config.TLS))
+		config.TLS = tlsVal
+		switch config.DBType {
+		case "mysql":
+			switch tlsVal {
+			case "true", "false", "skip-verify", "preferred":
+				// valid
+			default:
+				return nil, fmt.Errorf("unsupported TLS mode '%s' for MySQL. Valid values: false, true, skip-verify, preferred", config.TLS)
+			}
+		case "postgres":
+			switch tlsVal {
+			case "disable", "require", "verify-ca", "verify-full":
+				// valid
+			default:
+				return nil, fmt.Errorf("unsupported TLS mode '%s' for PostgreSQL. Valid values: disable, require, verify-ca, verify-full", config.TLS)
+			}
+		}
+	}
+
 	// Validate format and set default to markdown
 	format := strings.ToLower(strings.TrimSpace(config.Format))
 	switch format {
@@ -234,6 +258,11 @@ func connectToMySQL(config *Config) (*sql.DB, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s",
 		config.User, config.Password, config.Host, config.Port, config.Database)
 
+	// Add TLS parameter if specified
+	if config.TLS != "" && config.TLS != "false" {
+		dsn += "?tls=" + config.TLS
+	}
+
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
@@ -249,8 +278,12 @@ func connectToMySQL(config *Config) (*sql.DB, error) {
 
 // connectToPostgreSQL connects to PostgreSQL database
 func connectToPostgreSQL(config *Config) (*sql.DB, error) {
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s sslmode=disable",
-		config.Host, config.Port, config.User, config.Password)
+	sslmode := "disable"
+	if config.TLS != "" {
+		sslmode = config.TLS
+	}
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s sslmode=%s",
+		config.Host, config.Port, config.User, config.Password, sslmode)
 	if config.Database != "" {
 		dsn += fmt.Sprintf(" dbname=%s", config.Database)
 	}
