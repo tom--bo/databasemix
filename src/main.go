@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -34,17 +35,29 @@ type Config struct {
 	ExceptExtensions       bool // PostgreSQL only
 }
 
-
 func main() {
 	// Parse command line arguments
-	config := parseFlags()
+	config, err := parseFlags()
+	if err != nil {
+		log.Fatalf("Error parsing flags: %v", err)
+		os.Exit(1)
+	}
 
 	// Connect to database and create collector based on DB type
 	var db *sql.DB
 	var collector Collector
-	var err error
 
 	switch config.DBType {
+	case "mysql":
+		db, err = connectToMySQL(config)
+		if err != nil {
+			log.Fatalf("Failed to connect to MySQL: %v", err)
+		}
+		defer db.Close()
+		collector, err = NewMySQLCollector(db, config)
+		if err != nil {
+			log.Fatalf("Failed to create MySQL collector: %v", err)
+		}
 	case "postgres":
 		db, err = connectToPostgreSQL(config)
 		if err != nil {
@@ -54,16 +67,6 @@ func main() {
 		collector, err = NewPostgreSQLCollector(db, config)
 		if err != nil {
 			log.Fatalf("Failed to create PostgreSQL collector: %v", err)
-		}
-	default: // mysql
-		db, err = connectToMySQL(config)
-		if err != nil {
-			log.Fatalf("Failed to connect to MySQL: %v", err)
-		}
-		defer db.Close()
-		collector, err = NewMySQLCollector(db, config)
-		if err != nil {
-			log.Fatalf("Failed to create MySQL collector: %v", err)
 		}
 	}
 
@@ -120,11 +123,48 @@ func main() {
 	}
 }
 
-func parseFlags() *Config {
-	config := &Config{}
+func setDefaultConfigFromEnv(config *Config) {
+	// Try to get values from environment variables
+	// MySQL
+	if config.Host == "localhost" && os.Getenv("MYSQL_HOST") != "" {
+		config.Host = os.Getenv("MYSQL_HOST")
+	}
+	if os.Getenv("MYSQL_PORT") != "" {
+		config.Port = os.Getenv("MYSQL_PORT")
+	}
+	if os.Getenv("MYSQL_USER") != "" {
+		config.User = os.Getenv("MYSQL_USER")
+	}
+	if config.Password == "" && os.Getenv("MYSQL_PASSWORD") != "" {
+		config.Password = os.Getenv("MYSQL_PASSWORD")
+	}
+	if config.Database == "" && os.Getenv("MYSQL_DATABASE") != "" {
+		config.Database = os.Getenv("MYSQL_DATABASE")
+	}
+	// PostgreSQL
+	if config.Host == "localhost" && os.Getenv("PGHOST") != "" {
+		config.Host = os.Getenv("PGHOST")
+	}
+	if os.Getenv("PGPORT") != "" {
+		config.Port = os.Getenv("PGPORT")
+	}
+	if os.Getenv("PGUSER") != "" {
+		config.User = os.Getenv("PGUSER")
+	}
+	if config.Password == "" && os.Getenv("PGPASSWORD") != "" {
+		config.Password = os.Getenv("PGPASSWORD")
+	}
+	if config.Database == "" && os.Getenv("PGDATABASE") != "" {
+		config.Database = os.Getenv("PGDATABASE")
+	}
+}
 
-	flag.StringVar(&config.DBType, "type", "", "Database type: mysql, postgres (auto-detected from port if omitted)")
-	flag.StringVar(&config.Host, "host", "localhost", "Database host")
+func parseFlags() (*Config, error) {
+	config := &Config{}
+	setDefaultConfigFromEnv(config)
+
+	flag.StringVar(&config.DBType, "type", "", "(Required) Database type: MySQL, mysql, PostgreSQL, postgres, postgresql")
+	flag.StringVar(&config.Host, "host", "localhost", "Database host, (default: localhost)")
 	flag.StringVar(&config.Port, "port", "", "Database port (default: 3306 for mysql, 5432 for postgres)")
 	flag.StringVar(&config.User, "user", "", "Database user (default: root for mysql, postgres for postgres)")
 	flag.StringVar(&config.Password, "password", "", "Database password")
@@ -152,18 +192,10 @@ func parseFlags() *Config {
 		}
 		config.DBType = dbType
 	case "":
-		// Auto-detect from port
-		switch config.Port {
-		case "5432":
-			config.DBType = "postgres"
-		default:
-			config.DBType = "mysql"
-		}
+		return nil, errors.New("database type is required. Use -type flag to specify 'mysql' or 'postgres'")
 	default:
-		fmt.Printf("Warning: Unsupported database type '%s'. Defaulting to 'mysql'.\n", config.DBType)
-		config.DBType = "mysql"
+		return nil, errors.New(fmt.Sprintf("unsupported database type '%s'", config.DBType))
 	}
-
 	// Set defaults based on DB type
 	if config.Port == "" {
 		if config.DBType == "postgres" {
@@ -177,41 +209,6 @@ func parseFlags() *Config {
 			config.User = "postgres"
 		} else {
 			config.User = "root"
-		}
-	}
-
-	// Try to get values from environment variables if not provided via flags
-	if config.DBType == "postgres" {
-		if config.Host == "localhost" && os.Getenv("PGHOST") != "" {
-			config.Host = os.Getenv("PGHOST")
-		}
-		if os.Getenv("PGPORT") != "" {
-			config.Port = os.Getenv("PGPORT")
-		}
-		if os.Getenv("PGUSER") != "" {
-			config.User = os.Getenv("PGUSER")
-		}
-		if config.Password == "" && os.Getenv("PGPASSWORD") != "" {
-			config.Password = os.Getenv("PGPASSWORD")
-		}
-		if config.Database == "" && os.Getenv("PGDATABASE") != "" {
-			config.Database = os.Getenv("PGDATABASE")
-		}
-	} else {
-		if config.Host == "localhost" && os.Getenv("MYSQL_HOST") != "" {
-			config.Host = os.Getenv("MYSQL_HOST")
-		}
-		if os.Getenv("MYSQL_PORT") != "" {
-			config.Port = os.Getenv("MYSQL_PORT")
-		}
-		if os.Getenv("MYSQL_USER") != "" {
-			config.User = os.Getenv("MYSQL_USER")
-		}
-		if config.Password == "" && os.Getenv("MYSQL_PASSWORD") != "" {
-			config.Password = os.Getenv("MYSQL_PASSWORD")
-		}
-		if config.Database == "" && os.Getenv("MYSQL_DATABASE") != "" {
-			config.Database = os.Getenv("MYSQL_DATABASE")
 		}
 	}
 
@@ -229,7 +226,7 @@ func parseFlags() *Config {
 		config.Format = "markdown"
 	}
 
-	return config
+	return config, nil
 }
 
 // connectToMySQL connects to MySQL database
@@ -270,7 +267,6 @@ func connectToPostgreSQL(config *Config) (*sql.DB, error) {
 
 	return db, nil
 }
-
 
 // Data structures remain the same, but moved here for completeness
 

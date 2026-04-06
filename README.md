@@ -1,6 +1,6 @@
 # DatabaseMix
 
-A Go CLI tool to connect to MySQL / PostgreSQL instances and retrieve comprehensive database information, outputting it to Markdown, XML, or Plaintext format.
+`DatabaseMix` summarizes database information such as ACL, Table definition, variables, etc...
 (90% of this code is written by AI)
 
 ## Features
@@ -45,41 +45,14 @@ cd databasemix
 make build
 ```
 
-## Project Structure
-
-```
-databasemix/
-├── Makefile                 # Build & test automation
-├── src/                     # Go source code
-│   ├── main.go              # Entry point, CLI flags, data types
-│   ├── collector.go         # Collector interface
-│   ├── mysql_collector.go   # MySQL data collection
-│   ├── mysql_version.go     # MySQL version detection
-│   ├── postgres_collector.go # PostgreSQL data collection
-│   ├── postgres_version.go  # PostgreSQL version detection
-│   ├── formatter.go         # Output formatters (Markdown, XML, Plaintext)
-│   ├── go.mod
-│   └── go.sum
-├── test_containers/         # Docker-based test environments
-│   ├── mysql-common/        # Shared MySQL init SQL scripts
-│   ├── postgres-common/     # Shared PostgreSQL init SQL scripts
-│   ├── mysql-5.7/           # MySQL 5.7 (port 3357)
-│   ├── mysql-8.0/           # MySQL 8.0 (port 3380)
-│   ├── mysql-8.4/           # MySQL 8.4 (port 3384)
-│   ├── postgres-16/         # PostgreSQL 16 (port 5416)
-│   ├── postgres-17/         # PostgreSQL 17 (port 5417)
-│   └── postgres-18/         # PostgreSQL 18 (port 5418)
-└── samples/                 # Sample output files
-```
-
 ## Usage
 
 ```bash
 # MySQL
-./databasemix -type=mysql -host=localhost -port=3306 -user=root -password=yourpassword
+./databasemix -type mysql -host localhost -port 3306 -user root -password yourpassword
 
 # PostgreSQL
-./databasemix -type=postgres -host=localhost -port=5432 -user=postgres -password=yourpassword -database=mydb
+./databasemix -type postgres -host localhost -port 5432 -user postgres -password yourpassword -database mydb
 ```
 
 When `-type` is omitted, the database type is auto-detected from the port number (3306 → MySQL, 5432 → PostgreSQL).
@@ -144,17 +117,6 @@ make clean              # Remove binary and test output
 make help               # Show all available targets
 ```
 
-### Test Containers
-
-| Database | Version | Port | Directory |
-|----------|---------|------|-----------|
-| MySQL | 5.7 | 3357 | `test_containers/mysql-5.7/` |
-| MySQL | 8.0 | 3380 | `test_containers/mysql-8.0/` |
-| MySQL | 8.4 | 3384 | `test_containers/mysql-8.4/` |
-| PostgreSQL | 16 | 5416 | `test_containers/postgres-16/` |
-| PostgreSQL | 17 | 5417 | `test_containers/postgres-17/` |
-| PostgreSQL | 18 | 5418 | `test_containers/postgres-18/` |
-
 ### Test Data
 
 - **MySQL** (`test_containers/mysql-common/`): databases, tables, views, triggers, stored procedures/functions, sample data, multiple test users with different privilege levels
@@ -175,3 +137,19 @@ cd test_containers/mysql-8.0
 ./run.sh status   # Show container status
 ./run.sh clean    # Remove container and volumes
 ```
+
+## Feature Mapping Table with MySQL
+
+| Feature | MySQL | PostgreSQL | Notes |
+|---------|-------|------------|-------|
+| List of tables | `information_schema.TABLES` | `information_schema.tables` | Almost the same |
+| Table DDL | `SHOW CREATE TABLE` | SQL assembly | In PostgreSQL, it needs to be assembled |
+| View DDL | `SHOW CREATE VIEW` | `pg_get_viewdef()` | |
+| Users | `mysql.user` | `pg_roles (rolcanlogin=true)` | |
+| Roles | `mysql.user` + `role_edges` | `pg_roles (rolcanlogin=false)` + `pg_auth_members` | |
+| Privileges | `SHOW GRANTS FOR` | `information_schema.role_table_grants`, etc. | PostgreSQL uses multiple sources |
+| Variables | `performance_schema.global_variables` | `pg_settings` | |
+| Procedures | `information_schema.ROUTINES` | `pg_proc` + `pg_get_functiondef()` | |
+| Plugins | `information_schema.PLUGINS` | N/A | MySQL only |
+| Extensions | N/A | `pg_extension` | PostgreSQL only |
+| Replication | `SHOW REPLICA STATUS`, etc. | `pg_stat_replication`, etc. | Planned for future support |
