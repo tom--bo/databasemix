@@ -691,59 +691,6 @@ func (c *MySQLCollector) collectPlugins(info *DatabaseInfo) error {
 	}
 	defer rows.Close()
 
-	// Default plugins to exclude (built-in MySQL plugins)
-	excludePlugins := map[string]bool{
-		"mysqlx_cache_cleaner":        true,
-		"sha2_cache_cleaner":          true,
-		"caching_sha2_password":       true,
-		"mysql_native_password":       true,
-		"sha256_password":             true,
-		"mysqlx":                      true,
-		"ngram":                       true,
-		"ARCHIVE":                     true,
-		"binlog":                      true,
-		"BLACKHOLE":                   true,
-		"CSV":                         true,
-		"FEDERATED":                   true,
-		"InnoDB":                      true,
-		"MEMORY":                      true,
-		"MRG_MYISAM":                  true,
-		"MyISAM":                      true,
-		"ndbcluster":                  true,
-		"ndbinfo":                     true,
-		"PERFORMANCE_SCHEMA":          true,
-		"TempTable":                   true,
-		"daemon_keyring_proxy_plugin": true,
-		// InnoDB Information Schema plugins
-		"INNODB_BUFFER_PAGE":               true,
-		"INNODB_BUFFER_PAGE_LRU":           true,
-		"INNODB_BUFFER_POOL_STATS":         true,
-		"INNODB_CACHED_INDEXES":            true,
-		"INNODB_CMP":                       true,
-		"INNODB_CMPMEM":                    true,
-		"INNODB_CMPMEM_RESET":              true,
-		"INNODB_CMP_PER_INDEX":             true,
-		"INNODB_CMP_PER_INDEX_RESET":       true,
-		"INNODB_CMP_RESET":                 true,
-		"INNODB_COLUMNS":                   true,
-		"INNODB_FT_BEING_DELETED":          true,
-		"INNODB_FT_CONFIG":                 true,
-		"INNODB_FT_DEFAULT_STOPWORD":       true,
-		"INNODB_FT_DELETED":                true,
-		"INNODB_FT_INDEX_CACHE":            true,
-		"INNODB_FT_INDEX_TABLE":            true,
-		"INNODB_INDEXES":                   true,
-		"INNODB_METRICS":                   true,
-		"INNODB_SESSION_TEMP_TABLESPACES":  true,
-		"INNODB_TABLES":                    true,
-		"INNODB_TABLESPACES":               true,
-		"INNODB_TABLESTATS":                true,
-		"INNODB_TEMP_TABLE_INFO":           true,
-		"INNODB_TRX":                       true,
-		"INNODB_VIRTUAL":                   true,
-		"ndb_transid_mysql_connection_map": true,
-	}
-
 	for rows.Next() {
 		var plugin Plugin
 		var library, description sql.NullString
@@ -751,11 +698,6 @@ func (c *MySQLCollector) collectPlugins(info *DatabaseInfo) error {
 		err := rows.Scan(&plugin.Name, &plugin.Version, &plugin.Status,
 			&plugin.Type, &library, &description)
 		if err != nil {
-			continue
-		}
-
-		// Skip default plugins
-		if excludePlugins[plugin.Name] {
 			continue
 		}
 
