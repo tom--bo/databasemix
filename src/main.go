@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -10,10 +11,12 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 )
 
 // Configuration for database connection
 type Config struct {
+	DBType                 string // "mysql" or "postgres"
 	Host                   string
 	Port                   string
 	User                   string
@@ -29,30 +32,49 @@ type Config struct {
 	ExceptUsers            bool
 	ExceptRoles            bool
 	ExceptPlugins          bool
+	ExceptExtensions       bool // PostgreSQL only
+	TLS                    string // TLS/SSL mode: MySQL(false,true,skip-verify,preferred), PostgreSQL(disable,require,verify-ca,verify-full)
 }
-
 
 func main() {
 	// Parse command line arguments
-	config := parseFlags()
-
-	// Connect to MySQL
-	db, err := connectToMySQL(config)
+	config, err := parseFlags()
 	if err != nil {
-		log.Fatalf("Failed to connect to MySQL: %v", err)
-	}
-	defer db.Close()
-
-	// Create MySQL collector
-	collector, err := NewMySQLCollector(db, config)
-	if err != nil {
-		log.Fatalf("Failed to create MySQL collector: %v", err)
+		log.Fatalf("Error parsing flags: %v", err)
+		os.Exit(1)
 	}
 
-	// Collect all MySQL information
+	// Connect to database and create collector based on DB type
+	var db *sql.DB
+	var collector Collector
+
+	switch config.DBType {
+	case "mysql":
+		db, err = connectToMySQL(config)
+		if err != nil {
+			log.Fatalf("Failed to connect to MySQL: %v", err)
+		}
+		defer db.Close()
+		collector, err = NewMySQLCollector(db, config)
+		if err != nil {
+			log.Fatalf("Failed to create MySQL collector: %v", err)
+		}
+	case "postgres":
+		db, err = connectToPostgreSQL(config)
+		if err != nil {
+			log.Fatalf("Failed to connect to PostgreSQL: %v", err)
+		}
+		defer db.Close()
+		collector, err = NewPostgreSQLCollector(db, config)
+		if err != nil {
+			log.Fatalf("Failed to create PostgreSQL collector: %v", err)
+		}
+	}
+
+	// Collect all database information
 	info, err := collector.CollectAll()
 	if err != nil {
-		log.Fatalf("Failed to collect MySQL information: %v", err)
+		log.Fatalf("Failed to collect database information: %v", err)
 	}
 
 	// Create formatter based on requested format
@@ -102,29 +124,9 @@ func main() {
 	}
 }
 
-func parseFlags() *Config {
-	config := &Config{}
-
-	flag.StringVar(&config.Host, "host", "localhost", "Database host")
-	flag.StringVar(&config.Port, "port", "3306", "MySQL port")
-	flag.StringVar(&config.User, "user", "root", "MySQL user")
-	flag.StringVar(&config.Password, "password", "", "Database password")
-	flag.StringVar(&config.Database, "database", "", "MySQL database name (if not specified, all accessible databases will be analyzed)")
-	flag.BoolVar(&config.Replication, "replication", false, "Include replication information")
-	flag.BoolVar(&config.ExceptTables, "except-tables", false, "Exclude tables and views")
-	flag.BoolVar(&config.ExceptStoredProcedures, "except-stored-procedures", false, "Exclude stored procedures and functions")
-	flag.BoolVar(&config.ExceptVariables, "except-variables", false, "Exclude variables/configuration parameters")
-	flag.BoolVar(&config.OnlyModifiedVariables, "only-modified-variables", false, "Show only modified variables (default: show all)")
-	flag.BoolVar(&config.ExceptUsers, "except-users", false, "Exclude user accounts")
-	flag.BoolVar(&config.ExceptRoles, "except-roles", false, "Exclude user roles")
-	flag.BoolVar(&config.ExceptPlugins, "except-plugins", false, "Exclude installed plugins")
-	flag.StringVar(&config.Format, "format", "markdown", "Output format: markdown, xml, plaintext")
-	flag.StringVar(&config.OutputFile, "outfile", "dbmix-output", "Output filename (if not specified, output goes to stdout)")
-
-	flag.Parse()
-
-
-	// Try to get values from environment variables if not provided via flags
+func setDefaultConfigFromEnv(config *Config) {
+	// Try to get values from environment variables
+	// MySQL
 	if config.Host == "localhost" && os.Getenv("MYSQL_HOST") != "" {
 		config.Host = os.Getenv("MYSQL_HOST")
 	}
@@ -140,6 +142,100 @@ func parseFlags() *Config {
 	if config.Database == "" && os.Getenv("MYSQL_DATABASE") != "" {
 		config.Database = os.Getenv("MYSQL_DATABASE")
 	}
+	// PostgreSQL
+	if config.Host == "localhost" && os.Getenv("PGHOST") != "" {
+		config.Host = os.Getenv("PGHOST")
+	}
+	if os.Getenv("PGPORT") != "" {
+		config.Port = os.Getenv("PGPORT")
+	}
+	if os.Getenv("PGUSER") != "" {
+		config.User = os.Getenv("PGUSER")
+	}
+	if config.Password == "" && os.Getenv("PGPASSWORD") != "" {
+		config.Password = os.Getenv("PGPASSWORD")
+	}
+	if config.Database == "" && os.Getenv("PGDATABASE") != "" {
+		config.Database = os.Getenv("PGDATABASE")
+	}
+}
+
+func parseFlags() (*Config, error) {
+	config := &Config{}
+	setDefaultConfigFromEnv(config)
+
+	flag.StringVar(&config.DBType, "type", "", "Database type: mysql, postgres (default: mysql)")
+	flag.StringVar(&config.Host, "host", "localhost", "Database host, (default: localhost)")
+	flag.StringVar(&config.Port, "port", "", "Database port (default: 3306 for mysql, 5432 for postgres)")
+	flag.StringVar(&config.User, "user", "", "Database user (default: root for mysql, postgres for postgres)")
+	flag.StringVar(&config.Password, "password", "", "Database password")
+	flag.StringVar(&config.Database, "database", "", "Database name (if not specified, all accessible databases will be analyzed)")
+	flag.BoolVar(&config.Replication, "replication", false, "Include replication information (MySQL only)")
+	flag.BoolVar(&config.ExceptTables, "except-tables", false, "Exclude tables and views")
+	flag.BoolVar(&config.ExceptStoredProcedures, "except-stored-procedures", false, "Exclude stored procedures and functions")
+	flag.BoolVar(&config.ExceptVariables, "except-variables", false, "Exclude variables/configuration parameters")
+	flag.BoolVar(&config.OnlyModifiedVariables, "only-modified-variables", false, "Show only modified variables (default: show all)")
+	flag.BoolVar(&config.ExceptUsers, "except-users", false, "Exclude user accounts")
+	flag.BoolVar(&config.ExceptRoles, "except-roles", false, "Exclude user roles")
+	flag.BoolVar(&config.ExceptPlugins, "except-plugins", false, "Exclude installed plugins (MySQL only)")
+	flag.BoolVar(&config.ExceptExtensions, "except-extensions", false, "Exclude installed extensions (PostgreSQL only)")
+	flag.StringVar(&config.TLS, "tls", "", "TLS/SSL mode (MySQL: false,true,skip-verify,preferred / PostgreSQL: disable,require,verify-ca,verify-full)")
+	flag.StringVar(&config.Format, "format", "markdown", "Output format: markdown, xml, plaintext")
+	flag.StringVar(&config.OutputFile, "outfile", "dbmix-output", "Output filename (if not specified, output goes to stdout)")
+
+	flag.Parse()
+
+	// Resolve DB type
+	dbType := strings.ToLower(strings.TrimSpace(config.DBType))
+	switch dbType {
+	case "mysql", "postgres", "postgresql":
+		if dbType == "postgresql" {
+			dbType = "postgres"
+		}
+		config.DBType = dbType
+	case "":
+		dbType = "mysql"
+		config.DBType = dbType
+	default:
+		return nil, errors.New(fmt.Sprintf("unsupported database type '%s'", config.DBType))
+	}
+	// Set defaults based on DB type
+	if config.Port == "" {
+		if config.DBType == "postgres" {
+			config.Port = "5432"
+		} else {
+			config.Port = "3306"
+		}
+	}
+	if config.User == "" {
+		if config.DBType == "postgres" {
+			config.User = "postgres"
+		} else {
+			config.User = "root"
+		}
+	}
+
+	// Validate TLS option based on DB type
+	if config.TLS != "" {
+		tlsVal := strings.ToLower(strings.TrimSpace(config.TLS))
+		config.TLS = tlsVal
+		switch config.DBType {
+		case "mysql":
+			switch tlsVal {
+			case "true", "false", "skip-verify", "preferred":
+				// valid
+			default:
+				return nil, fmt.Errorf("unsupported TLS mode '%s' for MySQL. Valid values: false, true, skip-verify, preferred", config.TLS)
+			}
+		case "postgres":
+			switch tlsVal {
+			case "disable", "require", "verify-ca", "verify-full":
+				// valid
+			default:
+				return nil, fmt.Errorf("unsupported TLS mode '%s' for PostgreSQL. Valid values: disable, require, verify-ca, verify-full", config.TLS)
+			}
+		}
+	}
 
 	// Validate format and set default to markdown
 	format := strings.ToLower(strings.TrimSpace(config.Format))
@@ -151,12 +247,11 @@ func parseFlags() *Config {
 	case "plaintext", "text", "txt":
 		config.Format = "plaintext"
 	default:
-		// Default to markdown for invalid formats
 		fmt.Printf("Warning: Unsupported format '%s'. Using default 'markdown' format.\n", config.Format)
 		config.Format = "markdown"
 	}
 
-	return config
+	return config, nil
 }
 
 // connectToMySQL connects to MySQL database
@@ -164,13 +259,16 @@ func connectToMySQL(config *Config) (*sql.DB, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s",
 		config.User, config.Password, config.Host, config.Port, config.Database)
 
-	// Connect to MySQL
+	// Add TLS parameter if specified
+	if config.TLS != "" && config.TLS != "false" {
+		dsn += "?tls=" + config.TLS
+	}
+
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	// Test the connection
 	err = db.Ping()
 	if err != nil {
 		return nil, err
@@ -179,6 +277,30 @@ func connectToMySQL(config *Config) (*sql.DB, error) {
 	return db, nil
 }
 
+// connectToPostgreSQL connects to PostgreSQL database
+func connectToPostgreSQL(config *Config) (*sql.DB, error) {
+	sslmode := "disable"
+	if config.TLS != "" {
+		sslmode = config.TLS
+	}
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s sslmode=%s",
+		config.Host, config.Port, config.User, config.Password, sslmode)
+	if config.Database != "" {
+		dsn += fmt.Sprintf(" dbname=%s", config.Database)
+	}
+
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	err = db.Ping()
+	if err != nil {
+		return nil, err
+	}
+
+	return db, nil
+}
 
 // Data structures remain the same, but moved here for completeness
 
@@ -191,8 +313,9 @@ type ConnectionInfo struct {
 	Version  string
 }
 
-// Main data structure that holds all MySQL information
+// Main data structure that holds all database information
 type DatabaseInfo struct {
+	DBType          string // "mysql" or "postgres"
 	ConnectionInfo  *ConnectionInfo
 	Tables          []TableInfo
 	Users           []UserAccount
@@ -202,6 +325,14 @@ type DatabaseInfo struct {
 	Plugins         []Plugin
 	Components      []Component
 	ReplicationInfo *ReplicationInfo
+	Extensions      []Extension // PostgreSQL only
+}
+
+// Extension represents a PostgreSQL extension
+type Extension struct {
+	Name        string
+	Version     string
+	Description string
 }
 
 // Table information
@@ -231,6 +362,12 @@ type UserAccount struct {
 	AccountLocked   string
 	PasswordExpired string
 	Grants          []string
+	// PostgreSQL specific
+	IsSuperuser   bool
+	CanCreateDB   bool
+	CanCreateRole bool
+	ConnLimit     int
+	ValidUntil    string
 }
 
 // Stored routine information (procedures and functions)

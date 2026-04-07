@@ -1,0 +1,28 @@
+services:
+  postgres17:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbmix-postgres17-test
+    ports:
+      - "5417:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: rootpass
+      POSTGRES_DB: testdb
+    volumes:
+      - postgres17_data:/var/lib/postgresql/data
+      - ../postgres-common/01-database-setup.sql:/docker-entrypoint-initdb.d/01-database-setup.sql:ro
+      - ../postgres-common/02-tables-views.sql:/docker-entrypoint-initdb.d/02-tables-views.sql:ro
+      - ../postgres-common/03-functions.sql:/docker-entrypoint-initdb.d/03-functions.sql:ro
+      - ../postgres-common/05-sample-data.sql:/docker-entrypoint-initdb.d/05-sample-data.sql:ro
+      - ../postgres-common/06-roles-setup.sql:/docker-entrypoint-initdb.d/06-roles-setup.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  postgres17_data:

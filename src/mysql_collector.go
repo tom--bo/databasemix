@@ -34,7 +34,9 @@ func NewMySQLCollector(db *sql.DB, config *Config) (*MySQLCollector, error) {
 
 // CollectAll collects all MySQL information
 func (c *MySQLCollector) CollectAll() (*DatabaseInfo, error) {
-	info := &DatabaseInfo{}
+	info := &DatabaseInfo{
+		DBType: "mysql",
+	}
 
 	// Collect connection information
 	if err := c.collectConnectionInfo(info); err != nil {
@@ -444,21 +446,20 @@ func (c *MySQLCollector) collectVariables(info *DatabaseInfo) error {
 // collectVariablesFromPerformanceSchema collects variables from performance_schema (MySQL 5.7+)
 func (c *MySQLCollector) collectVariablesFromPerformanceSchema(info *DatabaseInfo) error {
 	var query string
-	
+
 	if c.config.OnlyModifiedVariables {
-		// Only get modified variables
 		query = `
-			SELECT vi.VARIABLE_NAME, gv.VARIABLE_VALUE, vi.VARIABLE_SOURCE, vi.DEFAULT_VALUE
+			SELECT vi.VARIABLE_NAME, gv.VARIABLE_VALUE,
+			       vi.VARIABLE_SOURCE, COALESCE(vi.VARIABLE_PATH, '') as VARIABLE_PATH
 			FROM performance_schema.variables_info vi
 			JOIN performance_schema.global_variables gv ON vi.VARIABLE_NAME = gv.VARIABLE_NAME
 			WHERE vi.VARIABLE_SOURCE != 'COMPILED'
 			ORDER BY vi.VARIABLE_NAME`
 	} else {
-		// Get all variables
 		query = `
-			SELECT vi.VARIABLE_NAME, gv.VARIABLE_VALUE, 
-			       COALESCE(vi.VARIABLE_SOURCE, 'COMPILED') as VARIABLE_SOURCE, 
-			       COALESCE(vi.DEFAULT_VALUE, '') as DEFAULT_VALUE
+			SELECT gv.VARIABLE_NAME, gv.VARIABLE_VALUE,
+			       COALESCE(vi.VARIABLE_SOURCE, 'COMPILED') as VARIABLE_SOURCE,
+			       COALESCE(vi.VARIABLE_PATH, '') as VARIABLE_PATH
 			FROM performance_schema.global_variables gv
 			LEFT JOIN performance_schema.variables_info vi ON vi.VARIABLE_NAME = gv.VARIABLE_NAME
 			ORDER BY gv.VARIABLE_NAME`
@@ -473,19 +474,20 @@ func (c *MySQLCollector) collectVariablesFromPerformanceSchema(info *DatabaseInf
 
 	for rows.Next() {
 		var variable Variable
-		var source, defaultValue sql.NullString
+		var source, variablePath sql.NullString
 
-		err := rows.Scan(&variable.Name, &variable.CurrentValue, &source, &defaultValue)
+		err := rows.Scan(&variable.Name, &variable.CurrentValue, &source, &variablePath)
 		if err != nil {
 			continue
 		}
 
 		if source.Valid {
 			variable.Source = source.String
+			// Append path info if available (e.g. config file path)
+			if variablePath.Valid && variablePath.String != "" {
+				variable.Source = source.String + " (" + variablePath.String + ")"
+			}
 			variable.IsModified = (source.String != "COMPILED")
-		}
-		if defaultValue.Valid {
-			variable.DefaultValue = defaultValue.String
 		}
 
 		info.Variables = append(info.Variables, variable)
@@ -522,8 +524,8 @@ func (c *MySQLCollector) collectVariablesFromInformationSchema(info *DatabaseInf
 			continue
 		}
 		
-		// For older versions, we can't easily determine if it's modified
-		variable.Source = "UNKNOWN"
+		// For older versions without variables_info, source is not available
+		variable.Source = ""
 		variable.IsModified = false
 		
 		info.Variables = append(info.Variables, variable)
@@ -689,59 +691,6 @@ func (c *MySQLCollector) collectPlugins(info *DatabaseInfo) error {
 	}
 	defer rows.Close()
 
-	// Default plugins to exclude (built-in MySQL plugins)
-	excludePlugins := map[string]bool{
-		"mysqlx_cache_cleaner":        true,
-		"sha2_cache_cleaner":          true,
-		"caching_sha2_password":       true,
-		"mysql_native_password":       true,
-		"sha256_password":             true,
-		"mysqlx":                      true,
-		"ngram":                       true,
-		"ARCHIVE":                     true,
-		"binlog":                      true,
-		"BLACKHOLE":                   true,
-		"CSV":                         true,
-		"FEDERATED":                   true,
-		"InnoDB":                      true,
-		"MEMORY":                      true,
-		"MRG_MYISAM":                  true,
-		"MyISAM":                      true,
-		"ndbcluster":                  true,
-		"ndbinfo":                     true,
-		"PERFORMANCE_SCHEMA":          true,
-		"TempTable":                   true,
-		"daemon_keyring_proxy_plugin": true,
-		// InnoDB Information Schema plugins
-		"INNODB_BUFFER_PAGE":               true,
-		"INNODB_BUFFER_PAGE_LRU":           true,
-		"INNODB_BUFFER_POOL_STATS":         true,
-		"INNODB_CACHED_INDEXES":            true,
-		"INNODB_CMP":                       true,
-		"INNODB_CMPMEM":                    true,
-		"INNODB_CMPMEM_RESET":              true,
-		"INNODB_CMP_PER_INDEX":             true,
-		"INNODB_CMP_PER_INDEX_RESET":       true,
-		"INNODB_CMP_RESET":                 true,
-		"INNODB_COLUMNS":                   true,
-		"INNODB_FT_BEING_DELETED":          true,
-		"INNODB_FT_CONFIG":                 true,
-		"INNODB_FT_DEFAULT_STOPWORD":       true,
-		"INNODB_FT_DELETED":                true,
-		"INNODB_FT_INDEX_CACHE":            true,
-		"INNODB_FT_INDEX_TABLE":            true,
-		"INNODB_INDEXES":                   true,
-		"INNODB_METRICS":                   true,
-		"INNODB_SESSION_TEMP_TABLESPACES":  true,
-		"INNODB_TABLES":                    true,
-		"INNODB_TABLESPACES":               true,
-		"INNODB_TABLESTATS":                true,
-		"INNODB_TEMP_TABLE_INFO":           true,
-		"INNODB_TRX":                       true,
-		"INNODB_VIRTUAL":                   true,
-		"ndb_transid_mysql_connection_map": true,
-	}
-
 	for rows.Next() {
 		var plugin Plugin
 		var library, description sql.NullString
@@ -749,11 +698,6 @@ func (c *MySQLCollector) collectPlugins(info *DatabaseInfo) error {
 		err := rows.Scan(&plugin.Name, &plugin.Version, &plugin.Status,
 			&plugin.Type, &library, &description)
 		if err != nil {
-			continue
-		}
-
-		// Skip default plugins
-		if excludePlugins[plugin.Name] {
 			continue
 		}
 
@@ -945,8 +889,8 @@ func (c *MySQLCollector) collectVariablesFromShowVariables(info *DatabaseInfo) e
 			continue
 		}
 		
-		// For very old versions, we can't determine if it's modified
-		variable.Source = "UNKNOWN"
+		// For very old versions, source is not available
+		variable.Source = ""
 		variable.IsModified = false
 		
 		info.Variables = append(info.Variables, variable)

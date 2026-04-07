@@ -13,13 +13,13 @@ services:
       MYSQL_PASSWORD: testpass
     volumes:
       - mysql80_data:/var/lib/mysql
-      - ../common/01-database-setup.sql:/docker-entrypoint-initdb.d/01-database-setup.sql:ro
-      - ../common/02-tables-views.sql:/docker-entrypoint-initdb.d/02-tables-views.sql:ro
-      - ../common/03-procedures-functions.sql:/docker-entrypoint-initdb.d/03-procedures-functions.sql:ro
+      - ../mysql-common/01-database-setup.sql:/docker-entrypoint-initdb.d/01-database-setup.sql:ro
+      - ../mysql-common/02-tables-views.sql:/docker-entrypoint-initdb.d/02-tables-views.sql:ro
+      - ../mysql-common/03-procedures-functions.sql:/docker-entrypoint-initdb.d/03-procedures-functions.sql:ro
       - ./roles-setup.sql:/docker-entrypoint-initdb.d/04-roles-setup.sql:ro
-      - ../common/05-sample-data.sql:/docker-entrypoint-initdb.d/05-sample-data.sql:ro
-      - ../common/06-test-plugins.sql:/docker-entrypoint-initdb.d/06-test-plugins.sql:ro
-      - ../common/07-limited-user.sql:/docker-entrypoint-initdb.d/07-limited-user.sql:ro
+      - ../mysql-common/05-sample-data.sql:/docker-entrypoint-initdb.d/05-sample-data.sql:ro
+      - ../mysql-common/06-test-plugins.sql:/docker-entrypoint-initdb.d/06-test-plugins.sql:ro
+      - ../mysql-common/07-limited-user.sql:/docker-entrypoint-initdb.d/07-limited-user.sql:ro
       - ./limited-user-mysql8.sql:/docker-entrypoint-initdb.d/08-limited-user-mysql8.sql:ro
     command: >
       --character-set-server=utf8mb4

@@ -45,14 +45,18 @@ func (f *MarkdownFormatter) Format(info *DatabaseInfo) (string, error) {
 	var result strings.Builder
 
 	// File Summary section
+	dbLabel := "MySQL"
+	if info.DBType == "postgres" {
+		dbLabel = "PostgreSQL"
+	}
 	result.WriteString("# File Summary\n\n")
-	result.WriteString("This file contains comprehensive MySQL database information compiled for AI context analysis. ")
+	result.WriteString(fmt.Sprintf("This file contains comprehensive %s database information compiled for AI context analysis. ", dbLabel))
 	result.WriteString("It includes schema definitions, account configurations, system variables, and other database metadata ")
 	result.WriteString("consolidated into a single file for efficient processing.\n\n")
 
 	// Add database type and connection info
 	if info.ConnectionInfo != nil {
-		result.WriteString("**Database Type**: MySQL  \n")
+		result.WriteString(fmt.Sprintf("**Database Type**: %s  \n", dbLabel))
 		result.WriteString(fmt.Sprintf("**Database Version**: %s\n\n", info.ConnectionInfo.Version))
 	}
 	
@@ -100,7 +104,11 @@ func (f *MarkdownFormatter) Format(info *DatabaseInfo) (string, error) {
 
 	// Roles
 	if len(info.Roles) > 0 {
-		result.WriteString("# User Roles (MySQL 8.0+)\n\n")
+		if info.DBType == "postgres" {
+			result.WriteString("# User Roles\n\n")
+		} else {
+			result.WriteString("# User Roles (MySQL 8.0+)\n\n")
+		}
 		f.formatRoles(&result, info.Roles)
 	}
 
@@ -122,6 +130,12 @@ func (f *MarkdownFormatter) Format(info *DatabaseInfo) (string, error) {
 		f.formatComponents(&result, info.Components)
 	}
 
+	// Extensions (PostgreSQL)
+	if len(info.Extensions) > 0 {
+		result.WriteString("# Extensions\n\n")
+		f.formatExtensions(&result, info.Extensions)
+	}
+
 	// Replication information
 	if info.ReplicationInfo != nil {
 		result.WriteString("# Replication Information\n\n")
@@ -131,13 +145,24 @@ func (f *MarkdownFormatter) Format(info *DatabaseInfo) (string, error) {
 	return result.String(), nil
 }
 
+func (f *MarkdownFormatter) formatExtensions(result *strings.Builder, extensions []Extension) {
+	result.WriteString("| Name | Version | Description |\n")
+	result.WriteString("|------|---------|-------------|\n")
+	for _, ext := range extensions {
+		desc := ext.Description
+		if desc == "" {
+			desc = "-"
+		}
+		result.WriteString(fmt.Sprintf("| %s | %s | %s |\n", ext.Name, ext.Version, desc))
+	}
+	result.WriteString("\n")
+}
+
 func (f *MarkdownFormatter) formatTables(result *strings.Builder, tables []TableInfo) {
 	if len(tables) == 0 {
 		return
 	}
-	
-	result.WriteString("# Tables\n\n")
-	
+
 	// Group tables by database and schema, excluding views
 	dbSchemaMap := make(map[string]map[string][]TableInfo)
 	for _, table := range tables {
@@ -230,32 +255,27 @@ func (f *MarkdownFormatter) formatViewDetails(result *strings.Builder, tables []
 }
 
 func (f *MarkdownFormatter) formatVariables(result *strings.Builder, variables []Variable) {
-	// Check if this is only-modified-variables mode by checking if all variables are modified
-	hasExtendedInfo := len(variables) > 0 && variables[0].IsModified
-	if hasExtendedInfo {
-		// Double-check that all variables are actually modified (only-modified-variables mode)
-		for _, v := range variables {
-			if !v.IsModified {
-				hasExtendedInfo = false
-				break
-			}
+	// Check if source information is available
+	hasSource := false
+	for _, v := range variables {
+		if v.Source != "" {
+			hasSource = true
+			break
 		}
 	}
-	
-	if hasExtendedInfo {
-		// 4-column format for -only-modified-variables
-		result.WriteString("| Variable Name | Current Value | Default Value | Source |\n")
-		result.WriteString("|---------------|---------------|---------------|--------|\n")
-		
+
+	if hasSource {
+		result.WriteString("| Variable Name | Current Value | Source |\n")
+		result.WriteString("|---------------|---------------|--------|\n")
+
 		for _, variable := range variables {
-			result.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
-				variable.Name, variable.CurrentValue, variable.DefaultValue, variable.Source))
+			result.WriteString(fmt.Sprintf("| %s | %s | %s |\n",
+				variable.Name, variable.CurrentValue, variable.Source))
 		}
 	} else {
-		// 2-column format for normal variables
 		result.WriteString("| Variable Name | Current Value |\n")
 		result.WriteString("|---------------|---------------|\n")
-		
+
 		for _, variable := range variables {
 			result.WriteString(fmt.Sprintf("| %s | %s |\n",
 				variable.Name, variable.CurrentValue))
@@ -267,9 +287,14 @@ func (f *MarkdownFormatter) formatVariables(result *strings.Builder, variables [
 // generateSectionsList creates a list of sections that will be included in the output
 func (f *MarkdownFormatter) generateSectionsList(info *DatabaseInfo) []string {
 	var sections []string
-	
+
+	dbLabel := "MySQL"
+	if info.DBType == "postgres" {
+		dbLabel = "PostgreSQL"
+	}
+
 	if len(info.Variables) > 0 {
-		sections = append(sections, "Variables - MySQL system variables and their current values")
+		sections = append(sections, fmt.Sprintf("Variables - %s system variables and their current values", dbLabel))
 	}
 	if len(info.Tables) > 0 {
 		sections = append(sections, "Tables - Database tables with metadata and DDL definitions")
@@ -286,30 +311,42 @@ func (f *MarkdownFormatter) generateSectionsList(info *DatabaseInfo) []string {
 		sections = append(sections, "Stored Procedures - User-defined procedures with their definitions")
 	}
 	if len(info.Roles) > 0 {
-		sections = append(sections, "User Roles - MySQL 8.0+ role definitions and assignments")
+		sections = append(sections, "User Roles - Role definitions and assignments")
 	}
 	if len(info.Users) > 0 {
 		sections = append(sections, "User Accounts - Database user accounts with privileges")
 	}
 	if len(info.Plugins) > 0 {
-		sections = append(sections, "Plugins - Installed MySQL plugins and extensions")
+		sections = append(sections, "Plugins - Installed MySQL plugins")
 	}
 	if len(info.Components) > 0 {
 		sections = append(sections, "Components - MySQL 8.0+ components")
 	}
-	if info.ReplicationInfo != nil {
-		sections = append(sections, "Replication Info - MySQL replication configuration and status")
+	if len(info.Extensions) > 0 {
+		sections = append(sections, "Extensions - Installed PostgreSQL extensions")
 	}
-	
+	if info.ReplicationInfo != nil {
+		sections = append(sections, "Replication Info - Replication configuration and status")
+	}
+
 	return sections
 }
 
 func (f *MarkdownFormatter) formatUsers(result *strings.Builder, users []UserAccount) {
 	for _, user := range users {
-		result.WriteString(fmt.Sprintf("## %s@%s\n\n", user.User, user.Host))
-		result.WriteString(fmt.Sprintf("- Plugin: %s\n", user.Plugin))
-		result.WriteString(fmt.Sprintf("- Account Locked: %s\n", user.AccountLocked))
-		
+		if user.Host != "" {
+			result.WriteString(fmt.Sprintf("## %s@%s\n\n", user.User, user.Host))
+		} else {
+			result.WriteString(fmt.Sprintf("## %s\n\n", user.User))
+		}
+
+		if user.Plugin != "" {
+			result.WriteString(fmt.Sprintf("- Attributes: %s\n", user.Plugin))
+		}
+		if user.AccountLocked != "" {
+			result.WriteString(fmt.Sprintf("- Account Locked: %s\n", user.AccountLocked))
+		}
+
 		if len(user.Grants) > 0 {
 			result.WriteString("- Grants:\n")
 			for _, grant := range user.Grants {
@@ -458,7 +495,7 @@ type XMLFormatter struct{}
 
 // XMLRoot represents the root element for XML output
 type XMLRoot struct {
-	XMLName           xml.Name               `xml:"mysql_info"`
+	XMLName           xml.Name               `xml:"database_info"`
 	ConnectionInfo    *XMLConnectionInfo     `xml:"connection_info,omitempty"`
 	Tables            []XMLTable             `xml:"tables>table"`
 	Users             []XMLUser              `xml:"users>user"`
@@ -518,8 +555,9 @@ type XMLRoutine struct {
 }
 
 type XMLVariable struct {
-	Name  string `xml:"name,attr"`
-	Value string `xml:"value"`
+	Name   string `xml:"name,attr"`
+	Value  string `xml:"value"`
+	Source string `xml:"source,omitempty"`
 }
 
 type XMLRole struct {
@@ -553,14 +591,19 @@ type XMLReplicationInfo struct {
 }
 
 func (f *XMLFormatter) Format(info *DatabaseInfo) (string, error) {
+	dbLabel := "MySQL"
+	if info.DBType == "postgres" {
+		dbLabel = "PostgreSQL"
+	}
+
 	var result strings.Builder
 	result.WriteString(xml.Header)
-	result.WriteString("<mysql_info>\n")
+	result.WriteString("<database_info>\n")
 
 	// File Summary section
 	result.WriteString("  <file_summary>\n")
 	result.WriteString("    <description>")
-	result.WriteString("This file contains comprehensive MySQL database information compiled for AI context analysis. ")
+	result.WriteString(fmt.Sprintf("This file contains comprehensive %s database information compiled for AI context analysis. ", dbLabel))
 	result.WriteString("It includes schema definitions, account configurations, system variables, and other database metadata ")
 	result.WriteString("consolidated into a single file for efficient processing.")
 	result.WriteString("</description>\n")
@@ -579,29 +622,14 @@ func (f *XMLFormatter) Format(info *DatabaseInfo) (string, error) {
 	// Variables
 	if len(info.Variables) > 0 {
 		result.WriteString("  <variables>\n")
-		
-		// Check if this is only-modified-variables mode
-		hasExtendedInfo := len(info.Variables) > 0 && info.Variables[0].IsModified
-		if hasExtendedInfo {
-			// Double-check that all variables are actually modified
-			for _, v := range info.Variables {
-				if !v.IsModified {
-					hasExtendedInfo = false
-					break
-				}
-			}
-		}
-		
+
 		for _, variable := range info.Variables {
 			result.WriteString("    <variable>\n")
 			result.WriteString(fmt.Sprintf("      <name>%s</name>\n", f.escapeXML(variable.Name)))
 			result.WriteString(fmt.Sprintf("      <current_value>%s</current_value>\n", f.escapeXML(variable.CurrentValue)))
-			
-			if hasExtendedInfo {
-				result.WriteString(fmt.Sprintf("      <default_value>%s</default_value>\n", f.escapeXML(variable.DefaultValue)))
+			if variable.Source != "" {
 				result.WriteString(fmt.Sprintf("      <source>%s</source>\n", f.escapeXML(variable.Source)))
 			}
-			
 			result.WriteString("    </variable>\n")
 		}
 		result.WriteString("  </variables>\n")
@@ -791,7 +819,7 @@ func (f *XMLFormatter) Format(info *DatabaseInfo) (string, error) {
 		result.WriteString("  </components>\n")
 	}
 
-	result.WriteString("</mysql_info>\n")
+	result.WriteString("</database_info>\n")
 	return result.String(), nil
 }
 
@@ -806,10 +834,13 @@ func (f *XMLFormatter) escapeXML(s string) string {
 
 // generateSectionsList creates a list of sections that will be included in the output
 func (f *XMLFormatter) generateSectionsList(info *DatabaseInfo) []string {
+	dbLabel := "MySQL"
+	if info.DBType == "postgres" {
+		dbLabel = "PostgreSQL"
+	}
 	var sections []string
-	
 	if len(info.Variables) > 0 {
-		sections = append(sections, "Variables - MySQL system variables and their current values")
+		sections = append(sections, fmt.Sprintf("Variables - %s system variables and their current values", dbLabel))
 	}
 	if len(info.Tables) > 0 {
 		sections = append(sections, "Tables - Database tables with metadata and DDL definitions")
@@ -826,21 +857,23 @@ func (f *XMLFormatter) generateSectionsList(info *DatabaseInfo) []string {
 		sections = append(sections, "Stored Procedures - User-defined procedures with their definitions")
 	}
 	if len(info.Roles) > 0 {
-		sections = append(sections, "User Roles - MySQL 8.0+ role definitions and assignments")
+		sections = append(sections, "User Roles - Role definitions and assignments")
 	}
 	if len(info.Users) > 0 {
 		sections = append(sections, "User Accounts - Database user accounts with privileges")
 	}
 	if len(info.Plugins) > 0 {
-		sections = append(sections, "Plugins - Installed MySQL plugins and extensions")
+		sections = append(sections, "Plugins - Installed MySQL plugins")
 	}
 	if len(info.Components) > 0 {
 		sections = append(sections, "Components - MySQL 8.0+ components")
 	}
-	if info.ReplicationInfo != nil {
-		sections = append(sections, "Replication Info - MySQL replication configuration and status")
+	if len(info.Extensions) > 0 {
+		sections = append(sections, "Extensions - Installed PostgreSQL extensions")
 	}
-	
+	if info.ReplicationInfo != nil {
+		sections = append(sections, "Replication Info - Replication configuration and status")
+	}
 	return sections
 }
 
@@ -938,8 +971,9 @@ func (f *XMLFormatter) convertToXML(info *DatabaseInfo) *XMLRoot {
 	// Convert variables
 	for _, variable := range info.Variables {
 		xmlRoot.Variables = append(xmlRoot.Variables, XMLVariable{
-			Name:  variable.Name,
-			Value: variable.CurrentValue,
+			Name:   variable.Name,
+			Value:  variable.CurrentValue,
+			Source: variable.Source,
 		})
 	}
 
@@ -999,9 +1033,13 @@ func (f *PlaintextFormatter) Format(info *DatabaseInfo) (string, error) {
 	var result strings.Builder
 
 	// File Summary section
+	dbLabel := "MySQL"
+	if info.DBType == "postgres" {
+		dbLabel = "PostgreSQL"
+	}
 	result.WriteString("File Summary\n")
 	result.WriteString("============\n\n")
-	result.WriteString("This file contains comprehensive MySQL database information compiled for AI context analysis. ")
+	result.WriteString(fmt.Sprintf("This file contains comprehensive %s database information compiled for AI context analysis. ", dbLabel))
 	result.WriteString("It includes schema definitions, account configurations, system variables, and other database metadata ")
 	result.WriteString("consolidated into a single file for efficient processing.\n\n")
 	
@@ -1020,33 +1058,27 @@ func (f *PlaintextFormatter) Format(info *DatabaseInfo) (string, error) {
 	if len(info.Variables) > 0 {
 		result.WriteString("Variables\n")
 		result.WriteString("=========\n\n")
-		
-		// Check if this is only-modified-variables mode
-		hasExtendedInfo := len(info.Variables) > 0 && info.Variables[0].IsModified
-		if hasExtendedInfo {
-			// Double-check that all variables are actually modified
-			for _, v := range info.Variables {
-				if !v.IsModified {
-					hasExtendedInfo = false
-					break
-				}
+
+		hasSource := false
+		for _, v := range info.Variables {
+			if v.Source != "" {
+				hasSource = true
+				break
 			}
 		}
-		
-		if hasExtendedInfo {
-			// 4-column format for -only-modified-variables
-			result.WriteString(fmt.Sprintf("%-40s %-30s %-30s %s\n", "Variable Name", "Current Value", "Default Value", "Source"))
-			result.WriteString(strings.Repeat("-", 130) + "\n")
-			
+
+		if hasSource {
+			result.WriteString(fmt.Sprintf("%-50s %-40s %s\n", "Variable Name", "Current Value", "Source"))
+			result.WriteString(strings.Repeat("-", 120) + "\n")
+
 			for _, variable := range info.Variables {
-				result.WriteString(fmt.Sprintf("%-40s %-30s %-30s %s\n",
-					variable.Name, variable.CurrentValue, variable.DefaultValue, variable.Source))
+				result.WriteString(fmt.Sprintf("%-50s %-40s %s\n",
+					variable.Name, variable.CurrentValue, variable.Source))
 			}
 		} else {
-			// 2-column format for normal variables
 			result.WriteString(fmt.Sprintf("%-50s %s\n", "Variable Name", "Current Value"))
 			result.WriteString(strings.Repeat("-", 100) + "\n")
-			
+
 			for _, variable := range info.Variables {
 				result.WriteString(fmt.Sprintf("%-50s %s\n",
 					variable.Name, variable.CurrentValue))
@@ -1284,10 +1316,13 @@ func (f *PlaintextFormatter) GetFileExtension() string {
 
 // generateSectionsList creates a list of sections that will be included in the output
 func (f *PlaintextFormatter) generateSectionsList(info *DatabaseInfo) []string {
+	dbLabel := "MySQL"
+	if info.DBType == "postgres" {
+		dbLabel = "PostgreSQL"
+	}
 	var sections []string
-	
 	if len(info.Variables) > 0 {
-		sections = append(sections, "Variables - MySQL system variables and their current values")
+		sections = append(sections, fmt.Sprintf("Variables - %s system variables and their current values", dbLabel))
 	}
 	if len(info.Tables) > 0 {
 		sections = append(sections, "Tables - Database tables with metadata and DDL definitions")
@@ -1304,21 +1339,23 @@ func (f *PlaintextFormatter) generateSectionsList(info *DatabaseInfo) []string {
 		sections = append(sections, "Stored Procedures - User-defined procedures with their definitions")
 	}
 	if len(info.Roles) > 0 {
-		sections = append(sections, "User Roles - MySQL 8.0+ role definitions and assignments")
+		sections = append(sections, "User Roles - Role definitions and assignments")
 	}
 	if len(info.Users) > 0 {
 		sections = append(sections, "User Accounts - Database user accounts with privileges")
 	}
 	if len(info.Plugins) > 0 {
-		sections = append(sections, "Plugins - Installed MySQL plugins and extensions")
+		sections = append(sections, "Plugins - Installed MySQL plugins")
 	}
 	if len(info.Components) > 0 {
 		sections = append(sections, "Components - MySQL 8.0+ components")
 	}
-	if info.ReplicationInfo != nil {
-		sections = append(sections, "Replication Info - MySQL replication configuration and status")
+	if len(info.Extensions) > 0 {
+		sections = append(sections, "Extensions - Installed PostgreSQL extensions")
 	}
-	
+	if info.ReplicationInfo != nil {
+		sections = append(sections, "Replication Info - Replication configuration and status")
+	}
 	return sections
 }
 
