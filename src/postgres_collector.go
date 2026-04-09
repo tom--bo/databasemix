@@ -47,14 +47,8 @@ func (c *PostgreSQLCollector) CollectAll() (*DatabaseInfo, error) {
 	}
 
 	if !c.config.ExceptUsers {
-		if err := c.collectUsers(info); err != nil {
-			log.Printf("Warning: failed to collect users: %v", err)
-		}
-	}
-
-	if !c.config.ExceptRoles {
-		if err := c.collectRoles(info); err != nil {
-			log.Printf("Warning: failed to collect roles: %v", err)
+		if err := c.collectAllRoles(info); err != nil {
+			log.Printf("Warning: failed to collect users/roles: %v", err)
 		}
 	}
 
@@ -348,14 +342,15 @@ func (c *PostgreSQLCollector) buildTableDDL(schema, name string) (string, error)
 	return ddl, nil
 }
 
-func (c *PostgreSQLCollector) collectUsers(info *DatabaseInfo) error {
+// collectAllRoles collects all PostgreSQL roles (both login and non-login) into a unified Users list
+func (c *PostgreSQLCollector) collectAllRoles(info *DatabaseInfo) error {
+	// Collect all roles (login users first, then non-login roles)
 	query := `
 		SELECT rolname, rolsuper, rolcreaterole, rolcreatedb,
-		       rolcanlogin, rolreplication, rolconnlimit, rolvaliduntil
+		       rolcanlogin, rolreplication, rolinherit, rolconnlimit, rolvaliduntil
 		FROM pg_catalog.pg_roles
-		WHERE rolcanlogin = true
-		  AND rolname NOT LIKE 'pg_%'
-		ORDER BY rolname`
+		WHERE rolname NOT LIKE 'pg_%'
+		ORDER BY rolcanlogin DESC, rolname`
 
 	rows, err := c.db.Query(query)
 	if err != nil {
@@ -365,25 +360,28 @@ func (c *PostgreSQLCollector) collectUsers(info *DatabaseInfo) error {
 
 	for rows.Next() {
 		var user UserAccount
-		var rolSuper, rolCreateRole, rolCreateDB, rolCanLogin, rolReplication bool
+		var rolSuper, rolCreateRole, rolCreateDB, rolCanLogin, rolReplication, rolInherit bool
 		var rolConnLimit int
 		var rolValidUntil sql.NullString
 
 		if err := rows.Scan(&user.User, &rolSuper, &rolCreateRole, &rolCreateDB,
-			&rolCanLogin, &rolReplication, &rolConnLimit, &rolValidUntil); err != nil {
+			&rolCanLogin, &rolReplication, &rolInherit, &rolConnLimit, &rolValidUntil); err != nil {
 			continue
 		}
 
-		user.Host = "" // PostgreSQL uses pg_hba.conf
+		user.Host = ""
 		user.IsSuperuser = rolSuper
 		user.CanCreateDB = rolCreateDB
 		user.CanCreateRole = rolCreateRole
+		user.CanLogin = rolCanLogin
+		user.Inherit = rolInherit
 		user.ConnLimit = rolConnLimit
+		user.IsRole = !rolCanLogin
 		if rolValidUntil.Valid {
 			user.ValidUntil = rolValidUntil.String
 		}
 
-		// Build attribute summary as Plugin field (for display compatibility)
+		// Build attribute summary
 		var attrs []string
 		if rolSuper {
 			attrs = append(attrs, "SUPERUSER")
@@ -397,14 +395,20 @@ func (c *PostgreSQLCollector) collectUsers(info *DatabaseInfo) error {
 		if rolReplication {
 			attrs = append(attrs, "REPLICATION")
 		}
-		if rolConnLimit >= 0 {
+		if !rolInherit {
+			attrs = append(attrs, "NOINHERIT")
+		}
+		if !rolCanLogin {
+			attrs = append(attrs, "NOLOGIN")
+		}
+		if rolConnLimit >= 0 && rolCanLogin {
 			attrs = append(attrs, fmt.Sprintf("CONNECTION LIMIT %d", rolConnLimit))
 		}
 		if len(attrs) > 0 {
 			user.Plugin = strings.Join(attrs, ", ")
 		}
 
-		// Get grants (role memberships and privileges)
+		// Get grants (database-level privileges)
 		grants, err := c.getUserGrants(user.User)
 		if err == nil {
 			user.Grants = grants
@@ -412,30 +416,17 @@ func (c *PostgreSQLCollector) collectUsers(info *DatabaseInfo) error {
 
 		info.Users = append(info.Users, user)
 	}
+
+	// Collect role memberships and populate AssignedRoles/GrantedTo
+	if err := c.collectRoleMemberships(info); err != nil {
+		log.Printf("Warning: failed to collect role memberships: %v", err)
+	}
+
 	return nil
 }
 
 func (c *PostgreSQLCollector) getUserGrants(rolname string) ([]string, error) {
 	var grants []string
-
-	// Role memberships
-	memberQuery := `
-		SELECT r.rolname
-		FROM pg_catalog.pg_auth_members m
-		JOIN pg_catalog.pg_roles r ON m.roleid = r.oid
-		WHERE m.member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1)`
-
-	rows, err := c.db.Query(memberQuery, rolname)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var memberOf string
-			if err := rows.Scan(&memberOf); err != nil {
-				continue
-			}
-			grants = append(grants, fmt.Sprintf("MEMBER OF %s", memberOf))
-		}
-	}
 
 	// Database-level privileges
 	dbGrantQuery := `
@@ -458,13 +449,16 @@ func (c *PostgreSQLCollector) getUserGrants(rolname string) ([]string, error) {
 	return grants, nil
 }
 
-func (c *PostgreSQLCollector) collectRoles(info *DatabaseInfo) error {
+// collectRoleMemberships collects pg_auth_members and populates AssignedRoles/GrantedTo
+func (c *PostgreSQLCollector) collectRoleMemberships(info *DatabaseInfo) error {
 	query := `
-		SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolcanlogin
-		FROM pg_catalog.pg_roles
-		WHERE rolcanlogin = false
-		  AND rolname NOT LIKE 'pg_%'
-		ORDER BY rolname`
+		SELECT r.rolname AS role_name,
+		       m.rolname AS member_name,
+		       am.admin_option
+		FROM pg_catalog.pg_auth_members am
+		JOIN pg_catalog.pg_roles r ON am.roleid = r.oid
+		JOIN pg_catalog.pg_roles m ON am.member = m.oid
+		ORDER BY r.rolname, m.rolname`
 
 	rows, err := c.db.Query(query)
 	if err != nil {
@@ -472,55 +466,36 @@ func (c *PostgreSQLCollector) collectRoles(info *DatabaseInfo) error {
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var rolName string
-		var rolSuper, rolCreateRole, rolCreateDB, rolCanLogin bool
+	// Build lookup
+	userIdx := make(map[string]int)
+	for i := range info.Users {
+		userIdx[info.Users[i].User] = i
+	}
 
-		if err := rows.Scan(&rolName, &rolSuper, &rolCreateRole, &rolCreateDB, &rolCanLogin); err != nil {
+	for rows.Next() {
+		var roleName, memberName string
+		var adminOption bool
+		if err := rows.Scan(&roleName, &memberName, &adminOption); err != nil {
 			continue
 		}
 
-		role := UserRole{
-			RoleName: rolName,
-			RoleHost: "", // PostgreSQL has no host concept for roles
+		edge := RoleEdge{
+			FromRole:  roleName,
+			ToUser:    memberName,
+			WithAdmin: adminOption,
 		}
 
-		// Build grants list from attributes
-		var attrs []string
-		if rolSuper {
-			attrs = append(attrs, "SUPERUSER")
-		}
-		if rolCreateDB {
-			attrs = append(attrs, "CREATEDB")
-		}
-		if rolCreateRole {
-			attrs = append(attrs, "CREATEROLE")
-		}
-		if len(attrs) > 0 {
-			role.Grants = append(role.Grants, "Attributes: "+strings.Join(attrs, ", "))
+		// Add to the member's AssignedRoles (member has been granted this role)
+		if idx, ok := userIdx[memberName]; ok {
+			info.Users[idx].AssignedRoles = append(info.Users[idx].AssignedRoles, edge)
 		}
 
-		// Get role members
-		memberQuery := `
-			SELECT r.rolname
-			FROM pg_catalog.pg_auth_members m
-			JOIN pg_catalog.pg_roles r ON m.member = r.oid
-			WHERE m.roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1)`
-
-		mRows, err := c.db.Query(memberQuery, rolName)
-		if err == nil {
-			defer mRows.Close()
-			for mRows.Next() {
-				var member string
-				if err := mRows.Scan(&member); err != nil {
-					continue
-				}
-				role.Members = append(role.Members, member)
-			}
+		// Add to the role's GrantedTo (this role has been granted to the member)
+		if idx, ok := userIdx[roleName]; ok {
+			info.Users[idx].GrantedTo = append(info.Users[idx].GrantedTo, edge)
 		}
-
-		info.Roles = append(info.Roles, role)
 	}
+
 	return nil
 }
 

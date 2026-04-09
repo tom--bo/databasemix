@@ -315,17 +315,18 @@ type ConnectionInfo struct {
 
 // Main data structure that holds all database information
 type DatabaseInfo struct {
-	DBType          string // "mysql" or "postgres"
-	ConnectionInfo  *ConnectionInfo
-	Tables          []TableInfo
-	Users           []UserAccount
-	Routines        []RoutineInfo
-	Variables       []Variable
-	Roles           []UserRole
-	Plugins         []Plugin
-	Components      []Component
-	ReplicationInfo *ReplicationInfo
-	Extensions      []Extension // PostgreSQL only
+	DBType           string // "mysql" or "postgres"
+	ConnectionInfo   *ConnectionInfo
+	Tables           []TableInfo
+	Users            []UserAccount
+	Routines         []RoutineInfo
+	Variables        []Variable
+	Roles            []UserRole         // Kept for backward compat but no longer populated
+	RoleRelatedVars  []RoleRelatedVar   // Role-related system variables
+	Plugins          []Plugin
+	Components       []Component
+	ReplicationInfo  *ReplicationInfo
+	Extensions       []Extension // PostgreSQL only
 }
 
 // Extension represents a PostgreSQL extension
@@ -353,6 +354,20 @@ type TableInfo struct {
 	DDL           string
 }
 
+// RoleEdge represents a role assignment (role granted to a user/role)
+type RoleEdge struct {
+	FromRole    string // The role being granted (MySQL: 'role'@'host', PostgreSQL: 'rolename')
+	ToUser      string // The user/role receiving the grant (MySQL: 'user'@'host', PostgreSQL: 'rolename')
+	WithAdmin   bool   // WITH ADMIN OPTION
+	IsDefault   bool   // Whether this is a default role for the target user
+}
+
+// RoleRelatedVar represents a role-related system variable
+type RoleRelatedVar struct {
+	Name  string
+	Value string
+}
+
 // User account information
 type UserAccount struct {
 	User            string
@@ -362,10 +377,15 @@ type UserAccount struct {
 	AccountLocked   string
 	PasswordExpired string
 	Grants          []string
+	AssignedRoles   []RoleEdge // Roles assigned TO this user (this user is the recipient)
+	GrantedTo       []RoleEdge // Users/roles this role is granted to (this user/role is the source)
+	IsRole          bool       // Hint: true if this account looks like a role (MySQL: account_locked=Y, PG: !canlogin)
 	// PostgreSQL specific
 	IsSuperuser   bool
 	CanCreateDB   bool
 	CanCreateRole bool
+	CanLogin      bool
+	Inherit       bool
 	ConnLimit     int
 	ValidUntil    string
 }

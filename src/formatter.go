@@ -102,20 +102,11 @@ func (f *MarkdownFormatter) Format(info *DatabaseInfo) (string, error) {
 		f.formatRoutines(&result, procedures)
 	}
 
-	// Roles
-	if len(info.Roles) > 0 {
-		if info.DBType == "postgres" {
-			result.WriteString("# User Roles\n\n")
-		} else {
-			result.WriteString("# User Roles (MySQL 8.0+)\n\n")
-		}
-		f.formatRoles(&result, info.Roles)
-	}
-
-	// Users
+	// Users (unified: roles + users)
 	if len(info.Users) > 0 {
-		result.WriteString("# User List\n\n")
-		f.formatUsers(&result, info.Users)
+		result.WriteString("# User Accounts\n\n")
+		f.formatRoleRelatedVars(&result, info)
+		f.formatUsers(&result, info)
 	}
 
 	// Plugins
@@ -310,11 +301,8 @@ func (f *MarkdownFormatter) generateSectionsList(info *DatabaseInfo) []string {
 	if len(procedures) > 0 {
 		sections = append(sections, "Stored Procedures - User-defined procedures with their definitions")
 	}
-	if len(info.Roles) > 0 {
-		sections = append(sections, "User Roles - Role definitions and assignments")
-	}
 	if len(info.Users) > 0 {
-		sections = append(sections, "User Accounts - Database user accounts with privileges")
+		sections = append(sections, "User Accounts - Database user/role accounts with privileges and role assignments")
 	}
 	if len(info.Plugins) > 0 {
 		sections = append(sections, "Plugins - Installed MySQL plugins")
@@ -332,8 +320,18 @@ func (f *MarkdownFormatter) generateSectionsList(info *DatabaseInfo) []string {
 	return sections
 }
 
-func (f *MarkdownFormatter) formatUsers(result *strings.Builder, users []UserAccount) {
-	for _, user := range users {
+func (f *MarkdownFormatter) formatRoleRelatedVars(result *strings.Builder, info *DatabaseInfo) {
+	if len(info.RoleRelatedVars) > 0 {
+		result.WriteString("## Role Related Variables\n\n")
+		for _, v := range info.RoleRelatedVars {
+			result.WriteString(fmt.Sprintf("- **%s**: %s\n", v.Name, v.Value))
+		}
+		result.WriteString("\n")
+	}
+}
+
+func (f *MarkdownFormatter) formatUsers(result *strings.Builder, info *DatabaseInfo) {
+	for _, user := range info.Users {
 		if user.Host != "" {
 			result.WriteString(fmt.Sprintf("## %s@%s\n\n", user.User, user.Host))
 		} else {
@@ -353,6 +351,37 @@ func (f *MarkdownFormatter) formatUsers(result *strings.Builder, users []UserAcc
 				result.WriteString(fmt.Sprintf("  - %s\n", grant))
 			}
 		}
+
+		// Assigned Roles (roles granted TO this user)
+		if len(user.AssignedRoles) > 0 {
+			result.WriteString("- Assigned Roles:\n")
+			for _, edge := range user.AssignedRoles {
+				parts := []string{edge.FromRole}
+				if edge.WithAdmin {
+					parts = append(parts, "(WITH ADMIN OPTION)")
+				}
+				if edge.IsDefault {
+					parts = append(parts, "(DEFAULT)")
+				}
+				result.WriteString(fmt.Sprintf("  - %s\n", strings.Join(parts, " ")))
+			}
+		}
+
+		// Granted To (users/roles this role is granted to)
+		if len(user.GrantedTo) > 0 {
+			result.WriteString("- Granted To:\n")
+			for _, edge := range user.GrantedTo {
+				parts := []string{edge.ToUser}
+				if edge.WithAdmin {
+					parts = append(parts, "(WITH ADMIN OPTION)")
+				}
+				if edge.IsDefault {
+					parts = append(parts, "(DEFAULT)")
+				}
+				result.WriteString(fmt.Sprintf("  - %s\n", strings.Join(parts, " ")))
+			}
+		}
+
 		result.WriteString("\n")
 	}
 }
@@ -392,22 +421,6 @@ func (f *MarkdownFormatter) formatRoutines(result *strings.Builder, routines []R
 	}
 }
 
-func (f *MarkdownFormatter) formatRoles(result *strings.Builder, roles []UserRole) {
-	for _, role := range roles {
-		result.WriteString(fmt.Sprintf("## %s@%s\n\n", role.RoleName, role.RoleHost))
-		
-		if len(role.Members) > 0 {
-			result.WriteString("- **Default Role for some users**\n\n")
-		}
-		
-		if len(role.Grants) > 0 {
-			for _, grant := range role.Grants {
-				result.WriteString(fmt.Sprintf("- %s\n", grant))
-			}
-			result.WriteString("\n")
-		}
-	}
-}
 
 func (f *MarkdownFormatter) formatPlugins(result *strings.Builder, plugins []Plugin) {
 	result.WriteString("| Name | Status | Type | Library | Version | Description |\n")
@@ -752,32 +765,29 @@ func (f *XMLFormatter) Format(info *DatabaseInfo) (string, error) {
 		result.WriteString("  </stored_procedures>\n")
 	}
 
-	// Roles (MySQL 8.0+)
-	if len(info.Roles) > 0 {
-		result.WriteString("  <user_roles>\n")
-		for _, role := range info.Roles {
-			result.WriteString("    <role>\n")
-			result.WriteString(fmt.Sprintf("      <name>%s@%s</name>\n", f.escapeXML(role.RoleName), f.escapeXML(role.RoleHost)))
-			if len(role.Grants) > 0 {
-				result.WriteString("      <grants>\n")
-				for _, grant := range role.Grants {
-					result.WriteString(fmt.Sprintf("        <grant>%s</grant>\n", f.escapeXML(grant)))
-				}
-				result.WriteString("      </grants>\n")
-			}
-			result.WriteString("    </role>\n")
-		}
-		result.WriteString("  </user_roles>\n")
-	}
-
-	// Users
+	// Users (unified: roles + users)
 	if len(info.Users) > 0 {
-		result.WriteString("  <users>\n")
+		result.WriteString("  <user_accounts>\n")
+		if len(info.RoleRelatedVars) > 0 {
+			result.WriteString("    <role_related_variables>\n")
+			for _, v := range info.RoleRelatedVars {
+				result.WriteString(fmt.Sprintf("      <variable name=\"%s\">%s</variable>\n", f.escapeXML(v.Name), f.escapeXML(v.Value)))
+			}
+			result.WriteString("    </role_related_variables>\n")
+		}
 		for _, user := range info.Users {
 			result.WriteString("    <user>\n")
-			result.WriteString(fmt.Sprintf("      <name>%s@%s</name>\n", f.escapeXML(user.User), f.escapeXML(user.Host)))
-			result.WriteString(fmt.Sprintf("      <plugin>%s</plugin>\n", f.escapeXML(user.Plugin)))
-			result.WriteString(fmt.Sprintf("      <account_locked>%s</account_locked>\n", user.AccountLocked))
+			if user.Host != "" {
+				result.WriteString(fmt.Sprintf("      <name>%s@%s</name>\n", f.escapeXML(user.User), f.escapeXML(user.Host)))
+			} else {
+				result.WriteString(fmt.Sprintf("      <name>%s</name>\n", f.escapeXML(user.User)))
+			}
+			if user.Plugin != "" {
+				result.WriteString(fmt.Sprintf("      <attributes>%s</attributes>\n", f.escapeXML(user.Plugin)))
+			}
+			if user.AccountLocked != "" {
+				result.WriteString(fmt.Sprintf("      <account_locked>%s</account_locked>\n", user.AccountLocked))
+			}
 			if len(user.Grants) > 0 {
 				result.WriteString("      <grants>\n")
 				for _, grant := range user.Grants {
@@ -785,9 +795,37 @@ func (f *XMLFormatter) Format(info *DatabaseInfo) (string, error) {
 				}
 				result.WriteString("      </grants>\n")
 			}
+			if len(user.AssignedRoles) > 0 {
+				result.WriteString("      <assigned_roles>\n")
+				for _, edge := range user.AssignedRoles {
+					attrs := ""
+					if edge.WithAdmin {
+						attrs += " with_admin=\"true\""
+					}
+					if edge.IsDefault {
+						attrs += " default=\"true\""
+					}
+					result.WriteString(fmt.Sprintf("        <role%s>%s</role>\n", attrs, f.escapeXML(edge.FromRole)))
+				}
+				result.WriteString("      </assigned_roles>\n")
+			}
+			if len(user.GrantedTo) > 0 {
+				result.WriteString("      <granted_to>\n")
+				for _, edge := range user.GrantedTo {
+					attrs := ""
+					if edge.WithAdmin {
+						attrs += " with_admin=\"true\""
+					}
+					if edge.IsDefault {
+						attrs += " default=\"true\""
+					}
+					result.WriteString(fmt.Sprintf("        <member%s>%s</member>\n", attrs, f.escapeXML(edge.ToUser)))
+				}
+				result.WriteString("      </granted_to>\n")
+			}
 			result.WriteString("    </user>\n")
 		}
-		result.WriteString("  </users>\n")
+		result.WriteString("  </user_accounts>\n")
 	}
 
 	// Plugins
@@ -856,11 +894,8 @@ func (f *XMLFormatter) generateSectionsList(info *DatabaseInfo) []string {
 	if len(procedures) > 0 {
 		sections = append(sections, "Stored Procedures - User-defined procedures with their definitions")
 	}
-	if len(info.Roles) > 0 {
-		sections = append(sections, "User Roles - Role definitions and assignments")
-	}
 	if len(info.Users) > 0 {
-		sections = append(sections, "User Accounts - Database user accounts with privileges")
+		sections = append(sections, "User Accounts - Database user/role accounts with privileges and role assignments")
 	}
 	if len(info.Plugins) > 0 {
 		sections = append(sections, "Plugins - Installed MySQL plugins")
@@ -974,16 +1009,6 @@ func (f *XMLFormatter) convertToXML(info *DatabaseInfo) *XMLRoot {
 			Name:   variable.Name,
 			Value:  variable.CurrentValue,
 			Source: variable.Source,
-		})
-	}
-
-	// Convert roles
-	for _, role := range info.Roles {
-		xmlRoot.Roles = append(xmlRoot.Roles, XMLRole{
-			RoleName: role.RoleName,
-			RoleHost: role.RoleHost,
-			Grants:   role.Grants,
-			Members:  role.Members,
 		})
 	}
 
@@ -1219,40 +1244,66 @@ func (f *PlaintextFormatter) Format(info *DatabaseInfo) (string, error) {
 		}
 	}
 
-	// Roles (MySQL 8.0+)
-	if len(info.Roles) > 0 {
-		result.WriteString("User Roles (MySQL 8.0+)\n")
-		result.WriteString("========================\n\n")
-		for _, role := range info.Roles {
-			result.WriteString(fmt.Sprintf("%s@%s\n", role.RoleName, role.RoleHost))
-			if len(role.Grants) > 0 {
-				for _, grant := range role.Grants {
-					result.WriteString(fmt.Sprintf("  %s\n", grant))
-				}
-			}
-			if len(role.Members) > 0 {
-				result.WriteString("  Members:\n")
-				for _, member := range role.Members {
-					result.WriteString(fmt.Sprintf("    %s\n", member))
-				}
+	// Users (unified: roles + users)
+	if len(info.Users) > 0 {
+		result.WriteString("User Accounts\n")
+		result.WriteString("=============\n\n")
+
+		// Role Related Variables
+		if len(info.RoleRelatedVars) > 0 {
+			result.WriteString("Role Related Variables\n")
+			result.WriteString("----------------------\n")
+			for _, v := range info.RoleRelatedVars {
+				result.WriteString(fmt.Sprintf("  %s: %s\n", v.Name, v.Value))
 			}
 			result.WriteString("\n")
 		}
-	}
 
-	// Users
-	if len(info.Users) > 0 {
-		result.WriteString("User List\n")
-		result.WriteString("=========\n\n")
 		for _, user := range info.Users {
-			result.WriteString(fmt.Sprintf("%s@%s\n", user.User, user.Host))
-			result.WriteString(strings.Repeat("-", len(user.User+"@"+user.Host)) + "\n")
-			result.WriteString(fmt.Sprintf("Plugin: %s\n", user.Plugin))
-			result.WriteString(fmt.Sprintf("Account Locked: %s\n", user.AccountLocked))
+			var label string
+			if user.Host != "" {
+				label = user.User + "@" + user.Host
+			} else {
+				label = user.User
+			}
+			result.WriteString(label + "\n")
+			result.WriteString(strings.Repeat("-", len(label)) + "\n")
+			if user.Plugin != "" {
+				result.WriteString(fmt.Sprintf("Attributes: %s\n", user.Plugin))
+			}
+			if user.AccountLocked != "" {
+				result.WriteString(fmt.Sprintf("Account Locked: %s\n", user.AccountLocked))
+			}
 			if len(user.Grants) > 0 {
 				result.WriteString("Grants:\n")
 				for _, grant := range user.Grants {
 					result.WriteString(fmt.Sprintf("  %s\n", grant))
+				}
+			}
+			if len(user.AssignedRoles) > 0 {
+				result.WriteString("Assigned Roles:\n")
+				for _, edge := range user.AssignedRoles {
+					line := "  " + edge.FromRole
+					if edge.WithAdmin {
+						line += " (WITH ADMIN OPTION)"
+					}
+					if edge.IsDefault {
+						line += " (DEFAULT)"
+					}
+					result.WriteString(line + "\n")
+				}
+			}
+			if len(user.GrantedTo) > 0 {
+				result.WriteString("Granted To:\n")
+				for _, edge := range user.GrantedTo {
+					line := "  " + edge.ToUser
+					if edge.WithAdmin {
+						line += " (WITH ADMIN OPTION)"
+					}
+					if edge.IsDefault {
+						line += " (DEFAULT)"
+					}
+					result.WriteString(line + "\n")
 				}
 			}
 			result.WriteString("\n")
@@ -1338,11 +1389,8 @@ func (f *PlaintextFormatter) generateSectionsList(info *DatabaseInfo) []string {
 	if len(procedures) > 0 {
 		sections = append(sections, "Stored Procedures - User-defined procedures with their definitions")
 	}
-	if len(info.Roles) > 0 {
-		sections = append(sections, "User Roles - Role definitions and assignments")
-	}
 	if len(info.Users) > 0 {
-		sections = append(sections, "User Accounts - Database user accounts with privileges")
+		sections = append(sections, "User Accounts - Database user/role accounts with privileges and role assignments")
 	}
 	if len(info.Plugins) > 0 {
 		sections = append(sections, "Plugins - Installed MySQL plugins")

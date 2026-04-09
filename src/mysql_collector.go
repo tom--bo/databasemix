@@ -50,18 +50,22 @@ func (c *MySQLCollector) CollectAll() (*DatabaseInfo, error) {
 		}
 	}
 
-	// Collect users unless excluded
+	// Collect users (and roles merged) unless excluded
 	if !c.config.ExceptUsers {
 		if err := c.collectUsers(info); err != nil {
 			return nil, fmt.Errorf("failed to collect users: %v", err)
 		}
-	}
-
-	// Collect roles unless excluded (MySQL 8.0+ only)
-	if !c.config.ExceptRoles && c.version.IsMySQL8OrLater() {
-		if err := c.collectMySQL8Features(info); err != nil {
-			return nil, fmt.Errorf("failed to collect MySQL 8.0+ features: %v", err)
+		// Collect role edges and default roles for MySQL 8.0+
+		if c.version.IsMySQL8OrLater() {
+			if err := c.collectRoleEdges(info); err != nil {
+				fmt.Printf("Warning: Failed to collect role edges: %v\n", err)
+			}
+			if err := c.collectDefaultRoles(info); err != nil {
+				fmt.Printf("Warning: Failed to collect default roles: %v\n", err)
+			}
 		}
+		// Collect role-related variables
+		c.collectRoleRelatedVars(info)
 	}
 
 	// Collect stored functions and procedures unless excluded
@@ -579,25 +583,13 @@ func (c *MySQLCollector) collectCommonModifiedVariables(info *DatabaseInfo) erro
 	return nil
 }
 
-// collectMySQL8Features collects MySQL 8.0+ specific features
-func (c *MySQLCollector) collectMySQL8Features(info *DatabaseInfo) error {
-	// Collect roles only
-	if err := c.collectRoles(info); err != nil {
-		// Don't fail completely if roles collection fails
-		fmt.Printf("Warning: Failed to collect roles: %v\n", err)
-	}
-
-	return nil
-}
-
-// collectRoles collects MySQL 8.0 roles
-func (c *MySQLCollector) collectRoles(info *DatabaseInfo) error {
-	// Get all roles
+// collectRoleEdges collects role assignments from mysql.role_edges (MySQL 8.0+)
+// and populates AssignedRoles/GrantedTo on each UserAccount
+func (c *MySQLCollector) collectRoleEdges(info *DatabaseInfo) error {
 	query := `
-		SELECT User as role_name, Host as role_host
-		FROM mysql.user 
-		WHERE account_locked = 'Y' AND password_expired != 'Y'
-		ORDER BY User, Host`
+		SELECT FROM_USER, FROM_HOST, TO_USER, TO_HOST, WITH_ADMIN_OPTION
+		FROM mysql.role_edges
+		ORDER BY FROM_USER, FROM_HOST, TO_USER, TO_HOST`
 
 	rows, err := c.db.Query(query)
 	if err != nil {
@@ -605,55 +597,100 @@ func (c *MySQLCollector) collectRoles(info *DatabaseInfo) error {
 	}
 	defer rows.Close()
 
+	// Build a lookup map for users by "user@host"
+	userIdx := make(map[string]int)
+	for i := range info.Users {
+		key := info.Users[i].User + "@" + info.Users[i].Host
+		userIdx[key] = i
+	}
+
 	for rows.Next() {
-		var role UserRole
-		err := rows.Scan(&role.RoleName, &role.RoleHost)
-		if err != nil {
+		var fromUser, fromHost, toUser, toHost, withAdmin string
+		if err := rows.Scan(&fromUser, &fromHost, &toUser, &toHost, &withAdmin); err != nil {
 			continue
 		}
 
-		// Get role grants
-		grants, err := c.getUserGrants(role.RoleName, role.RoleHost)
-		if err == nil {
-			role.Grants = grants
+		fromKey := fromUser + "@" + fromHost
+		toKey := toUser + "@" + toHost
+
+		edge := RoleEdge{
+			FromRole:  fmt.Sprintf("`%s`@`%s`", fromUser, fromHost),
+			ToUser:    fmt.Sprintf("`%s`@`%s`", toUser, toHost),
+			WithAdmin: (withAdmin == "Y"),
 		}
 
-		// Get role members (users who have this role)
-		members, err := c.getRoleMembers(role.RoleName, role.RoleHost)
-		if err == nil {
-			role.Members = members
+		// Add to the recipient's AssignedRoles
+		if idx, ok := userIdx[toKey]; ok {
+			info.Users[idx].AssignedRoles = append(info.Users[idx].AssignedRoles, edge)
 		}
 
-		info.Roles = append(info.Roles, role)
+		// Add to the source role's GrantedTo
+		if idx, ok := userIdx[fromKey]; ok {
+			info.Users[idx].GrantedTo = append(info.Users[idx].GrantedTo, edge)
+		}
 	}
 
 	return nil
 }
 
-// getRoleMembers gets users who have a specific role
-func (c *MySQLCollector) getRoleMembers(roleName, roleHost string) ([]string, error) {
-	var members []string
-
+// collectDefaultRoles collects default role assignments from mysql.default_roles (MySQL 8.0+)
+// and marks the corresponding RoleEdge entries as default
+func (c *MySQLCollector) collectDefaultRoles(info *DatabaseInfo) error {
 	query := `
-		SELECT CONCAT(TO_USER, '@', TO_HOST) as member
-		FROM mysql.role_edges 
-		WHERE FROM_USER = ? AND FROM_HOST = ?`
+		SELECT USER, HOST, DEFAULT_ROLE_USER, DEFAULT_ROLE_HOST
+		FROM mysql.default_roles
+		ORDER BY USER, HOST`
 
-	rows, err := c.db.Query(query, roleName, roleHost)
+	rows, err := c.db.Query(query)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var member string
-		if err := rows.Scan(&member); err != nil {
-			continue
-		}
-		members = append(members, member)
+	// Build lookup
+	userIdx := make(map[string]int)
+	for i := range info.Users {
+		key := info.Users[i].User + "@" + info.Users[i].Host
+		userIdx[key] = i
 	}
 
-	return members, nil
+	for rows.Next() {
+		var user, host, defRoleUser, defRoleHost string
+		if err := rows.Scan(&user, &host, &defRoleUser, &defRoleHost); err != nil {
+			continue
+		}
+
+		userKey := user + "@" + host
+		defRoleKey := fmt.Sprintf("`%s`@`%s`", defRoleUser, defRoleHost)
+
+		if idx, ok := userIdx[userKey]; ok {
+			for j := range info.Users[idx].AssignedRoles {
+				if info.Users[idx].AssignedRoles[j].FromRole == defRoleKey {
+					info.Users[idx].AssignedRoles[j].IsDefault = true
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// collectRoleRelatedVars collects role-related MySQL system variables
+func (c *MySQLCollector) collectRoleRelatedVars(info *DatabaseInfo) {
+	varNames := []string{"activate_all_roles_on_login", "mandatory_roles"}
+
+	for _, varName := range varNames {
+		var value string
+		query := fmt.Sprintf("SELECT @@global.%s", varName)
+		err := c.db.QueryRow(query).Scan(&value)
+		if err != nil {
+			continue
+		}
+		info.RoleRelatedVars = append(info.RoleRelatedVars, RoleRelatedVar{
+			Name:  varName,
+			Value: value,
+		})
+	}
 }
 
 // collectComponents collects MySQL 8.0 components
